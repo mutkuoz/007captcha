@@ -1,0 +1,8 @@
+{
+  "name": "007captcha-express-example",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "express": "^5.0.0"
+  }
+}

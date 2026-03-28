@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>007captcha - Vanilla HTML Example</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      background: #f3f4f6;
+    }
+    .demo {
+      text-align: center;
+    }
+    h1 {
+      font-size: 24px;
+      margin-bottom: 8px;
+      color: #111827;
+    }
+    p {
+      color: #6b7280;
+      margin-bottom: 24px;
+      font-size: 14px;
+    }
+    form {
+      display: inline-block;
+    }
+    #captcha-container {
+      margin-bottom: 16px;
+    }
+    button[type="submit"] {
+      background: #2563eb;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 24px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    button[type="submit"]:hover { opacity: 0.9; }
+    #result {
+      margin-top: 16px;
+      padding: 12px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-family: monospace;
+      max-width: 320px;
+      word-break: break-all;
+      text-align: left;
+    }
+    #result.show {
+      background: #ecfdf5;
+      border: 1px solid #a7f3d0;
+    }
+  </style>
+</head>
+<body>
+  <div class="demo">
+    <h1>007captcha Demo</h1>
+    <p>Complete the captcha challenge below</p>
+
+    <form id="demo-form">
+      <div id="captcha-container"></div>
+      <button type="submit">Submit</button>
+    </form>
+
+    <div id="result"></div>
+  </div>
+
+  <script src="../../packages/client/dist/umd/index.global.js"></script>
+  <script>
+    const widget = OOSevenCaptcha.render({
+      siteKey: 'demo-site-key-change-me',
+      container: '#captcha-container',
+      theme: 'light',
+      onSuccess: function(token) {
+        console.log('Captcha passed! Token:', token);
+      },
+      onFailure: function(err) {
+        console.log('Captcha failed:', err.message);
+      }
+    });
+
+    document.getElementById('demo-form').addEventListener('submit', function(e) {
+      e.preventDefault();
+      var token = widget.getToken();
+      var resultEl = document.getElementById('result');
+      if (token) {
+        resultEl.className = 'show';
+        resultEl.textContent = 'Token: ' + token.substring(0, 80) + '...';
+      } else {
+        resultEl.className = 'show';
+        resultEl.textContent = 'No token — complete the captcha first!';
+      }
+    });
+  </script>
+</body>
+</html>

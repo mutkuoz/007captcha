@@ -1,0 +1,31 @@
+{
+  "name": "@007captcha/react",
+  "version": "0.1.0",
+  "description": "007captcha React component wrapper",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format esm,cjs --dts --clean --external react --external @007captcha/client"
+  },
+  "peerDependencies": {
+    "@007captcha/client": ">=0.1.0",
+    "react": ">=18.0.0"
+  },
+  "devDependencies": {
+    "@007captcha/client": "workspace:*",
+    "@types/react": "^19.0.0",
+    "react": "^19.0.0"
+  },
+  "license": "MIT"
+}
