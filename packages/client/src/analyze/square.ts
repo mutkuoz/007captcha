@@ -134,14 +134,18 @@ export function analyzeSquare(points: CapturePoint[]): ShapePerfectionMetrics {
   // Closure gap
   const closureGap = dist(points[0], points[points.length - 1]) / (meanSide || 1);
 
+  // Closure: first and last points should be near each other relative to side length
+  const closureComponent = closureGap < 0.3 ? 1 : closureGap < 0.6 ? 0.5 : closureGap < 1.0 ? 0.2 : 0;
+
   // Match score
   const angleSum = angles.reduce((s, a) => s + a, 0);
   const angleSumDev = Math.abs(angleSum - 2 * Math.PI) / (2 * Math.PI);
   const matchScore = Math.max(0, Math.min(1,
-    (1 - angleSumDev * 3) * 0.4 +
-    (angleDev < 0.5 ? 1 : 0.5 / angleDev) * 0.3 +
-    (avgStraightness < 10 ? 1 : 10 / avgStraightness) * 0.15 +
-    parallelism * 0.15
+    (1 - angleSumDev * 3) * 0.3 +
+    (angleDev < 0.5 ? 1 : 0.5 / angleDev) * 0.2 +
+    (avgStraightness < 10 ? 1 : 10 / avgStraightness) * 0.1 +
+    parallelism * 0.15 +
+    closureComponent * 0.25
   ));
 
   // Perfection score

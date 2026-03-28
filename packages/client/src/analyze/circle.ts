@@ -86,14 +86,19 @@ export function analyzeCircle(points: CapturePoint[]): ShapePerfectionMetrics {
   maxGap = Math.max(maxGap, (2 * Math.PI) - (sortedAngles[sortedAngles.length - 1] - sortedAngles[0]));
   const angularCoverage = 1 - maxGap / (2 * Math.PI);
 
+  // Closure: how close first and last points are (0 = perfectly closed, higher = open)
+  // A closed circle should have closureGap < ~0.3 (relative to radius)
+  const closureComponent = closureGap < 0.3 ? 1 : closureGap < 0.6 ? 0.5 : closureGap < 1.0 ? 0.2 : 0;
+
   // Match score: does this look like a circle?
-  // Require low RMS error AND low radius variation to count as a circle
+  // Require low RMS error AND low radius variation AND closed shape
   const rmsComponent = normalizedRms < 0.15 ? 1 : normalizedRms < 0.3 ? 0.5 : 0.15 / normalizedRms;
   const rvComponent = radiusVariation < 0.1 ? 1 : radiusVariation < 0.25 ? 0.5 : 0.1 / radiusVariation;
   const matchScore = Math.max(0, Math.min(1,
-    rmsComponent * 0.4 +
-    rvComponent * 0.3 +
-    Math.min(1, angularCoverage / 0.7) * 0.3
+    rmsComponent * 0.3 +
+    rvComponent * 0.25 +
+    Math.min(1, angularCoverage / 0.7) * 0.2 +
+    closureComponent * 0.25
   ));
 
   // Perfection score: how geometrically perfect (low error = high perfection)

@@ -268,15 +268,24 @@ All packages have **zero runtime dependencies**.
 
 **Behavioral analysis:** Cursor speed variation, micro-jitter, timing irregularity, and pause patterns are hard to replicate even for sophisticated bots that study the detection algorithms.
 
-## Development
+## Try It
 
 ```bash
 pnpm install
-pnpm -r run build
-pnpm test
+pnpm demo
+```
+
+Opens a demo server at `http://localhost:3007` with a method picker (shape, maze, ball) and server-side verification. All three methods work out of the box — the ball challenge SSE endpoints are included.
+
+## Development
+
+```bash
+pnpm install          # install dependencies
+pnpm test             # run all tests
+pnpm -r run build     # build all packages
+pnpm demo             # build + start demo server
 ```
 
 ## License
 
 MIT
-# 007captcha

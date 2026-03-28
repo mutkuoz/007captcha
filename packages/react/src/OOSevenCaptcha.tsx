@@ -9,6 +9,7 @@ export interface OOSevenCaptchaProps extends Omit<CaptchaConfig, 'container'> {
 export function OOSevenCaptcha({
   className,
   siteKey,
+  method,
   theme,
   timeLimit,
   onSuccess,
@@ -24,6 +25,7 @@ export function OOSevenCaptcha({
     const widget = new CaptchaWidget({
       siteKey,
       container: containerRef.current,
+      method,
       theme,
       timeLimit,
       onSuccess,
@@ -36,7 +38,7 @@ export function OOSevenCaptcha({
       widget.destroy();
       widgetRef.current = null;
     };
-  }, [siteKey, theme, timeLimit]);
+  }, [siteKey, method, theme, timeLimit]);
 
   return <div ref={containerRef} className={className} />;
 }

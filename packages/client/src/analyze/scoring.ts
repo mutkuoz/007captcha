@@ -10,7 +10,7 @@ function normalize(value: number, min: number, max: number): number {
  * Compute the behavioral "humanity" score from raw metrics.
  * Higher score = more human-like.
  */
-function scoreBehavioral(m: BehavioralMetrics): number {
+export function scoreBehavioral(m: BehavioralMetrics): number {
   // Point count: humans 200-600, bots <20
   const pointScore = normalize(m.pointCount, 10, 200);
 
@@ -50,8 +50,13 @@ export function computeScore(
   // Shape perfection: high perfection = bot-like, so invert
   const shapeScore = 1.0 - shape.perfectionScore;
 
+  // Match score penalty: if the drawing doesn't match the expected shape,
+  // scale down the final score. A matchScore of 0 zeroes out everything.
+  const matchFactor = Math.max(0, Math.min(1, shape.matchScore));
+
   // Weighted combination
-  const finalScore = 0.60 * behavioralScore + 0.40 * shapeScore;
+  const rawScore = 0.60 * behavioralScore + 0.40 * shapeScore;
+  const finalScore = rawScore * matchFactor;
 
   // Clamp to 0-1
   const score = Math.max(0, Math.min(1, finalScore));

@@ -16,10 +16,11 @@ function makeToken(payload: Record<string, unknown>, key = SECRET): string {
 }
 
 describe('verify', () => {
-  it('should verify a valid token', async () => {
+  it('should verify a valid token (new format)', async () => {
     const token = makeToken({
       cid: 'test-123',
-      shape: 'circle',
+      method: 'shape',
+      challenge: 'circle',
       score: 0.85,
       verdict: 'human',
       ts: Date.now(),
@@ -31,12 +32,49 @@ describe('verify', () => {
     expect(result.success).toBe(true);
     expect(result.score).toBe(0.85);
     expect(result.verdict).toBe('human');
-    expect(result.shape).toBe('circle');
+    expect(result.method).toBe('shape');
+    expect(result.challenge).toBe('circle');
   });
 
-  it('should reject a tampered token', async () => {
+  it('should verify a valid maze token', async () => {
     const token = makeToken({
-      cid: 'test-123',
+      cid: 'test-456',
+      method: 'maze',
+      challenge: 'maze',
+      score: 0.72,
+      verdict: 'human',
+      ts: Date.now(),
+      ph: 'def456',
+      origin: 'http://localhost',
+    });
+
+    const result = await verify(token, SECRET);
+    expect(result.success).toBe(true);
+    expect(result.method).toBe('maze');
+    expect(result.challenge).toBe('maze');
+  });
+
+  it('should verify a valid ball token', async () => {
+    const token = makeToken({
+      cid: 'test-789',
+      method: 'ball',
+      challenge: 'ball',
+      score: 0.78,
+      verdict: 'human',
+      ts: Date.now(),
+      ph: 'ghi789',
+      origin: 'http://localhost',
+    });
+
+    const result = await verify(token, SECRET);
+    expect(result.success).toBe(true);
+    expect(result.method).toBe('ball');
+    expect(result.challenge).toBe('ball');
+  });
+
+  it('should handle legacy token format (shape field)', async () => {
+    const token = makeToken({
+      cid: 'test-legacy',
       shape: 'circle',
       score: 0.85,
       verdict: 'human',
@@ -45,7 +83,24 @@ describe('verify', () => {
       origin: 'http://localhost',
     });
 
-    // Tamper with payload
+    const result = await verify(token, SECRET);
+    expect(result.success).toBe(true);
+    expect(result.method).toBe('shape');
+    expect(result.challenge).toBe('circle');
+  });
+
+  it('should reject a tampered token', async () => {
+    const token = makeToken({
+      cid: 'test-123',
+      method: 'shape',
+      challenge: 'circle',
+      score: 0.85,
+      verdict: 'human',
+      ts: Date.now(),
+      ph: 'abc123',
+      origin: 'http://localhost',
+    });
+
     const parts = token.split('.');
     const tampered = parts[0] + 'X.' + parts[1];
     const result = await verify(tampered, SECRET);
@@ -56,10 +111,11 @@ describe('verify', () => {
   it('should reject an expired token', async () => {
     const token = makeToken({
       cid: 'test-123',
-      shape: 'circle',
+      method: 'shape',
+      challenge: 'circle',
       score: 0.85,
       verdict: 'human',
-      ts: Date.now() - 6 * 60 * 1000, // 6 minutes ago
+      ts: Date.now() - 6 * 60 * 1000,
       ph: 'abc123',
       origin: 'http://localhost',
     });
@@ -72,7 +128,8 @@ describe('verify', () => {
   it('should reject a token signed with wrong key', async () => {
     const token = makeToken({
       cid: 'test-123',
-      shape: 'circle',
+      method: 'shape',
+      challenge: 'circle',
       score: 0.85,
       verdict: 'human',
       ts: Date.now(),
@@ -93,7 +150,8 @@ describe('verify', () => {
   it('should correctly report bot verdict', async () => {
     const token = makeToken({
       cid: 'test-123',
-      shape: 'square',
+      method: 'shape',
+      challenge: 'square',
       score: 0.1,
       verdict: 'bot',
       ts: Date.now(),

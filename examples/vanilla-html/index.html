@@ -75,9 +75,11 @@
 
   <script src="../../packages/client/dist/umd/index.global.js"></script>
   <script>
+    // method: 'random' (default), 'shape', or 'maze'
     const widget = OOSevenCaptcha.render({
       siteKey: 'demo-site-key-change-me',
       container: '#captcha-container',
+      method: 'random',
       theme: 'light',
       onSuccess: function(token) {
         console.log('Captcha passed! Token:', token);

@@ -6,6 +6,9 @@ export interface CapturePoint {
   pressure?: number;
 }
 
+/** Challenge method discriminator */
+export type ChallengeMethod = 'shape' | 'maze' | 'ball';
+
 /** Which shape the user was asked to draw */
 export type ShapeType = 'circle' | 'triangle' | 'square';
 
@@ -29,6 +32,50 @@ export interface ShapePerfectionMetrics {
   details: Record<string, number>;
 }
 
+/** Maze cell with walls */
+export interface MazeCell {
+  row: number;
+  col: number;
+  walls: { top: boolean; right: boolean; bottom: boolean; left: boolean };
+}
+
+/** Complete maze definition */
+export interface MazeDefinition {
+  rows: number;
+  cols: number;
+  cells: MazeCell[][];
+  entrance: { row: number; col: number };
+  exit: { row: number; col: number };
+  cellSize: number;
+}
+
+/** Maze-specific analysis metrics */
+export interface MazeAnalysisMetrics {
+  reachedExit: boolean;
+  wallCrossings: number;
+  wallTouches: number;
+  pathStraightness: number; // 0=winding, 1=perfectly straight (bot signal)
+  optimalPathRatio: number; // userPath / shortestPath (1.0 = suspiciously optimal)
+  backtrackCount: number;
+}
+
+/** Ball shape variants for the ball-following challenge */
+export type BallShape = 'circle' | 'square' | 'triangle' | 'diamond';
+
+/** Ball visual configuration received from server */
+export interface BallVisuals {
+  bgColor: string;
+  ballColor: string;
+  ballShape: BallShape;
+}
+
+/** A single frame received from the server SSE stream */
+export interface BallFrame {
+  x: number;
+  y: number;
+  t: number;
+}
+
 /** Combined analysis result */
 export interface AnalysisResult {
   score: number; // 0.0 (bot) to 1.0 (human)
@@ -40,7 +87,8 @@ export interface AnalysisResult {
 /** The token payload before signing */
 export interface TokenPayload {
   cid: string; // challenge ID
-  shape: ShapeType;
+  method: ChallengeMethod;
+  challenge: string; // 'circle'|'triangle'|'square' for shape, 'maze' for maze
   score: number;
   verdict: 'bot' | 'human' | 'uncertain';
   ts: number; // timestamp
@@ -52,8 +100,11 @@ export interface TokenPayload {
 export interface CaptchaConfig {
   siteKey: string;
   container: string | HTMLElement;
+  method?: ChallengeMethod | 'random'; // default 'random'
   theme?: 'light' | 'dark' | 'auto';
   timeLimit?: number; // default 10000ms
+  /** Server URL for ball challenge (required when method is 'ball' or 'random'). */
+  serverUrl?: string;
   onSuccess?: (token: string) => void;
   onFailure?: (error: Error) => void;
   onExpired?: () => void;
@@ -63,7 +114,8 @@ export interface CaptchaConfig {
 export interface VerifyResult {
   success: boolean;
   score: number;
-  shape: ShapeType;
+  method: ChallengeMethod;
+  challenge: string;
   verdict: 'bot' | 'human' | 'uncertain';
   timestamp: number;
   error?: string;

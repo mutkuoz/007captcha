@@ -25,7 +25,8 @@ function MyForm() {
     <form>
       <OOSevenCaptcha
         siteKey="your-site-key"
-        theme="light"
+        method="ball"
+        serverUrl={window.location.origin}
         onSuccess={handleSuccess}
       />
       <button type="submit">Submit</button>
@@ -36,14 +37,19 @@ function MyForm() {
 
 ## Props
 
+All props from `CaptchaConfig` (except `container`, which is managed internally), plus `className`.
+
 | Prop | Type | Default | Description |
 |------|------|---------|-------------|
 | `siteKey` | `string` | required | Your site key |
+| `method` | `'random' \| 'shape' \| 'maze' \| 'ball'` | `'random'` | Challenge method |
+| `serverUrl` | `string` | — | Server URL (required for `'ball'`) |
 | `theme` | `'light' \| 'dark' \| 'auto'` | `'light'` | Color theme |
-| `timeLimit` | `number` | `10000` | Time limit in ms |
-| `className` | `string` | — | CSS class for the container div |
-| `onSuccess` | `(token: string) => void` | — | Called on successful verification |
-| `onFailure` | `(error: Error) => void` | — | Called on failed verification |
+| `timeLimit` | `number` | varies | Max time in ms |
+| `className` | `string` | — | CSS class for the wrapper div |
+| `onSuccess` | `(token: string) => void` | — | Called when challenge passes |
+| `onFailure` | `(error: Error) => void` | — | Called when challenge fails |
+| `onExpired` | `() => void` | — | Called when token expires |
 
 ## License
 
