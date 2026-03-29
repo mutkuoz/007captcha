@@ -120,3 +120,102 @@ export function analyzeMazePath(
 
   return { reachedExit, wallCrossings, wallTouches, pathStraightness, optimalPathRatio, backtrackCount };
 }
+
+// --- Fitts's Law Validation ---
+// Human movement time correlates with log2(D/W + 1) where D=distance, W=target width.
+// In maze corridors, W ≈ cellSize. Bots navigate all corridors at similar speeds.
+
+export interface FittsMetrics {
+  fittsR2: number;        // R² of movement time vs Fitts prediction
+  fittsSampleCount: number;
+}
+
+export function analyzeFittsLaw(
+  points: CursorPoint[],
+  maze: MazeDefinition,
+  offsetX: number,
+  offsetY: number,
+): FittsMetrics {
+  const fail: FittsMetrics = { fittsR2: 0, fittsSampleCount: 0 };
+  if (points.length < 20) return fail;
+
+  const { cellSize } = maze;
+
+  // Segment the path into cell-level traversals
+  // Track which cell each point is in and measure time to traverse
+  interface CellSegment {
+    distance: number;
+    time: number;
+  }
+
+  const segments: CellSegment[] = [];
+  let segStart = 0;
+  let prevCell = getCellCoord(points[0], offsetX, offsetY, cellSize);
+
+  for (let i = 1; i < points.length; i++) {
+    const cell = getCellCoord(points[i], offsetX, offsetY, cellSize);
+    if (cell.r !== prevCell.r || cell.c !== prevCell.c) {
+      // Crossed into a new cell — record the segment
+      const dx = points[i].x - points[segStart].x;
+      const dy = points[i].y - points[segStart].y;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      const time = points[i].t - points[segStart].t;
+
+      if (time > 0 && distance > 2) {
+        segments.push({ distance, time });
+      }
+
+      segStart = i;
+      prevCell = cell;
+    }
+  }
+
+  if (segments.length < 5) return { ...fail, fittsSampleCount: segments.length };
+
+  // Fitts's Law regression: T = a + b * log2(D/W + 1)
+  const W = cellSize;
+  const fittsX: number[] = []; // log2(D/W + 1)
+  const fittsY: number[] = []; // movement time T
+
+  for (const seg of segments) {
+    fittsX.push(Math.log2(seg.distance / W + 1));
+    fittsY.push(seg.time);
+  }
+
+  // Linear regression
+  const n = fittsX.length;
+  let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+  for (let i = 0; i < n; i++) {
+    sumX += fittsX[i];
+    sumY += fittsY[i];
+    sumXY += fittsX[i] * fittsY[i];
+    sumX2 += fittsX[i] * fittsX[i];
+  }
+
+  const denom = n * sumX2 - sumX * sumX;
+  if (Math.abs(denom) < 1e-10) return { ...fail, fittsSampleCount: n };
+
+  const b = (n * sumXY - sumX * sumY) / denom;
+  const a = (sumY - b * sumX) / n;
+
+  // R²
+  const meanY = sumY / n;
+  let ssTot = 0, ssRes = 0;
+  for (let i = 0; i < n; i++) {
+    const predicted = a + b * fittsX[i];
+    ssRes += (fittsY[i] - predicted) ** 2;
+    ssTot += (fittsY[i] - meanY) ** 2;
+  }
+  const fittsR2 = ssTot > 0 ? Math.max(0, 1 - ssRes / ssTot) : 0;
+
+  return { fittsR2, fittsSampleCount: n };
+}
+
+function getCellCoord(
+  p: CursorPoint, offsetX: number, offsetY: number, cellSize: number,
+): { r: number; c: number } {
+  return {
+    r: Math.floor((p.y - offsetY) / cellSize),
+    c: Math.floor((p.x - offsetX) / cellSize),
+  };
+}

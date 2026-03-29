@@ -5,7 +5,7 @@
 <h1 align="center">@007captcha/react</h1>
 
 <p align="center">
-  React component for 007captcha.
+  React component for 007captcha &mdash; behavioral captcha with multi-layered bot detection.
 </p>
 
 <p align="center">
@@ -89,6 +89,8 @@ function LoginForm() {
 | `onExpired` | `() => void` | &mdash; | Called when a token expires |
 
 The component automatically handles mounting, cleanup, and re-initialization when `siteKey`, `method`, `theme`, or `timeLimit` change.
+
+Browser environment signals (webdriver detection, screen dimensions, plugin count, etc.) are automatically collected and sent with each verification request for server-side bot detection. No additional configuration is needed.
 
 ## Requirements
 

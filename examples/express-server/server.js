@@ -73,9 +73,13 @@ app.get('/captcha/ball/:id/stream', (req, res) => {
 /** Verify cursor points against the recorded ball trajectory */
 app.post('/captcha/ball/:id/verify', (req, res) => {
   const sessionId = req.params.id;
-  const { points, cursorStartT, origin } = req.body;
+  const { points, cursorStartT, origin, clientEnv } = req.body;
+  const requestMeta = {
+    userAgent: req.headers['user-agent'],
+    acceptLanguage: req.headers['accept-language'],
+  };
 
-  const result = ballManager.verify(sessionId, points || [], cursorStartT || 0, origin || '');
+  const result = ballManager.verify(sessionId, points || [], cursorStartT || 0, origin || '', clientEnv, requestMeta);
   res.json(result);
 });
 
@@ -90,8 +94,12 @@ app.post('/captcha/maze/start', (req, res) => {
 /** Verify cursor path against the server's maze */
 app.post('/captcha/maze/:id/verify', (req, res) => {
   const sessionId = req.params.id;
-  const { points, origin } = req.body;
-  const result = mazeManager.verify(sessionId, points || [], origin || '');
+  const { points, origin, clientEnv } = req.body;
+  const requestMeta = {
+    userAgent: req.headers['user-agent'],
+    acceptLanguage: req.headers['accept-language'],
+  };
+  const result = mazeManager.verify(sessionId, points || [], origin || '', clientEnv, requestMeta);
   res.json(result);
 });
 
@@ -106,8 +114,12 @@ app.post('/captcha/shape/start', (req, res) => {
 /** Verify cursor points against the server's shape analysis */
 app.post('/captcha/shape/:id/verify', (req, res) => {
   const sessionId = req.params.id;
-  const { points, origin } = req.body;
-  const result = shapeManager.verify(sessionId, points || [], origin || '');
+  const { points, origin, clientEnv } = req.body;
+  const requestMeta = {
+    userAgent: req.headers['user-agent'],
+    acceptLanguage: req.headers['accept-language'],
+  };
+  const result = shapeManager.verify(sessionId, points || [], origin || '', clientEnv, requestMeta);
   res.json(result);
 });
 
