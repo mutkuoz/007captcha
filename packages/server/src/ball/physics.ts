@@ -1,14 +1,14 @@
 import type { BallFrame, TrajectoryChangeEvent } from '../types';
 
-const CANVAS_W = 308;
-const CANVAS_H = 260;
-const PADDING = 20;
-const MIN_SPEED = 40;
-const MAX_SPEED = 180;
+const CANVAS_W = 480;
+const CANVAS_H = 400;
+const PADDING = 28;
+const MIN_SPEED = 18;
+const MAX_SPEED = 70;
 const FRAME_INTERVAL = 1000 / 60; // ~16.67ms
-const CHANGE_MIN_MS = 300;
-const CHANGE_MAX_MS = 800;
-const LERP_DURATION = 150;
+const CHANGE_MIN_MS = 500;
+const CHANGE_MAX_MS = 1200;
+const LERP_DURATION = 200;
 const BOUNCE_DAMPEN = 0.85;
 const COLOR_CHANGE_MIN_MS = 800;
 const COLOR_CHANGE_MAX_MS = 3000;
@@ -77,7 +77,7 @@ export class BallPhysics {
     this.startY = this.y;
 
     const angle = Math.random() * Math.PI * 2;
-    const speed = randomInRange(60, 120);
+    const speed = randomInRange(30, 60);
     this.vx = Math.cos(angle) * speed;
     this.vy = Math.sin(angle) * speed;
 

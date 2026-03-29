@@ -29,6 +29,13 @@ describe('analyzeMazePath', () => {
     const offsetX = 10;
     const offsetY = 10;
     const points = pathToPoints(solution, maze, offsetX, offsetY, 2);
+    // Ensure the last point is clearly inside the exit zone
+    const exitCell = solution[solution.length - 1];
+    points.push({
+      x: offsetX + exitCell.col * maze.cellSize + maze.cellSize * 0.9,
+      y: offsetY + exitCell.row * maze.cellSize + maze.cellSize / 2,
+      t: points[points.length - 1].t + 16,
+    });
 
     const result = analyzeMazePath(points, maze, solution, offsetX, offsetY);
     expect(result.reachedExit).toBe(true);

@@ -26,12 +26,12 @@ function makeBotCursorPoints(): CursorPoint[] {
 
 function makeHumanBallMetrics(): BallAnalysisMetrics {
   return {
-    averageDistance: 25,
-    distanceStdDev: 18,
+    averageDistance: 65,
+    distanceStdDev: 20,
     estimatedLag: 200,
     lagConsistency: 40,
-    overshootCount: 4,
-    trackingCoverage: 0.75,
+    overshootCount: 3,
+    trackingCoverage: 0.70,
   };
 }
 

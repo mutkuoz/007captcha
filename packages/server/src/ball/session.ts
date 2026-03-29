@@ -3,6 +3,7 @@ import type { BallVisuals, BallShape, CursorPoint, BallVerifyResult } from '../t
 import { BallPhysics } from './physics';
 import { analyzeBallTracking } from './analyze';
 import { computeBallScore } from './scoring';
+import { renderBallFrame } from './renderer';
 
 const BALL_SHAPES: BallShape[] = ['circle', 'square', 'triangle', 'diamond'];
 
@@ -89,34 +90,46 @@ export class BallChallengeManager {
   }
 
   /**
-   * Start streaming frames for a session.
-   * onFrame is called for each physics tick (~60fps).
-   * onEnd is called when the 8-second simulation finishes.
-   * onColorChange is called when ball/background colors change mid-challenge.
+   * Start streaming rendered PNG frames for a session.
+   * Frames are rendered server-side as images — no raw coordinates are exposed.
+   * onFrame receives `{ img: base64PNG, t: timeOffset }` at ~20fps.
+   * onEnd is called when the simulation finishes.
    */
   startStreaming(
     sessionId: string,
-    onFrame: (frame: { x: number; y: number; t: number }) => void,
+    onFrame: (frame: { img: string; t: number }) => void,
     onEnd: () => void,
-    onColorChange?: (visuals: BallVisuals) => void,
   ): boolean {
     const session = this.sessions.get(sessionId);
     if (!session || session.status !== 'pending') return false;
 
     session.status = 'streaming';
     session.streamStartedAt = Date.now();
+    let frameCount = 0;
 
     session.physics.start(
-      (frame) => onFrame(frame),
+      (frame) => {
+        frameCount++;
+        // Send every 3rd frame (~20fps) to keep bandwidth reasonable
+        if (frameCount % 3 !== 0) return;
+
+        const png = renderBallFrame(
+          frame.x, frame.y,
+          session.visuals.bgColor,
+          session.visuals.ballColor,
+          session.visuals.ballShape,
+        );
+        onFrame({ img: png.toString('base64'), t: frame.t });
+      },
       () => {
         session.status = 'awaiting_result';
         onEnd();
       },
-      onColorChange ? () => {
+      // Color changes handled internally — new colors apply to next rendered frame
+      () => {
         const newPair = this.pickDifferentColorPair(session.visuals.bgColor);
         session.visuals = { ...session.visuals, bgColor: newPair.bg, ballColor: newPair.ball };
-        onColorChange(session.visuals);
-      } : undefined,
+      },
     );
 
     return true;

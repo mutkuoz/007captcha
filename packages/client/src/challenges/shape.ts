@@ -1,9 +1,5 @@
 import type { ChallengeContext, ChallengeInstance } from '../challenge';
 import type { ChallengeMethod, CapturePoint, ShapeType, AnalysisResult } from '../types';
-import { DrawingCapture } from '../capture';
-import { analyzeDrawing } from '../analyze';
-
-const SHAPES: ShapeType[] = ['circle', 'triangle', 'square'];
 
 const SHAPE_ICONS: Record<ShapeType, string> = {
   circle: '\u25EF',
@@ -12,20 +8,32 @@ const SHAPE_ICONS: Record<ShapeType, string> = {
 };
 
 const SHAPE_INSTRUCTIONS: Record<ShapeType, string> = {
-  circle: 'Draw a <strong>circle</strong> \u2014 freehand, one continuous stroke. Don\u2019t try to be perfect!',
-  triangle: 'Draw a <strong>triangle</strong> \u2014 three sides, connected corners. Don\u2019t lift your cursor!',
-  square: 'Draw a <strong>square</strong> \u2014 four sides, connected corners. Keep it in one stroke!',
+  circle: 'Draw a <strong>circle</strong> as precisely as you can \u2014 one continuous stroke!',
+  triangle: 'Draw a <strong>triangle</strong> as precisely as you can \u2014 three connected sides!',
+  square: 'Draw a <strong>square</strong> as precisely as you can \u2014 four connected sides!',
 };
-
-const MIN_MATCH_SCORE = 0.25;
-const MIN_POINTS = 15;
 
 export class ShapeChallenge implements ChallengeInstance {
   showDoneButton = true;
   timeLimit = null;
 
+  private serverUrl: string;
+  private siteKey: string;
   private shape!: ShapeType;
-  private capture!: DrawingCapture;
+  private sessionId: string | null = null;
+  private points: CapturePoint[] = [];
+  private drawing = false;
+  private ctx!: ChallengeContext;
+  private serverResult: { token: string; score: number; verdict: 'bot' | 'human' | 'uncertain' } | null = null;
+
+  private handleDown!: (e: PointerEvent) => void;
+  private handleMove!: (e: PointerEvent) => void;
+  private handleUp!: (e: PointerEvent) => void;
+
+  constructor(serverUrl: string, siteKey: string) {
+    this.serverUrl = serverUrl.replace(/\/$/, '');
+    this.siteKey = siteKey;
+  }
 
   getMethod(): ChallengeMethod {
     return 'shape';
@@ -39,9 +47,26 @@ export class ShapeChallenge implements ChallengeInstance {
     return 'Draw the shape below';
   }
 
-  start(ctx: ChallengeContext): void {
-    this.shape = SHAPES[Math.floor(Math.random() * SHAPES.length)];
-    this.capture = new DrawingCapture(ctx.canvas, ctx.strokeColor, 2.5);
+  async start(ctx: ChallengeContext): Promise<void> {
+    this.ctx = ctx;
+    this.points = [];
+    this.drawing = false;
+    this.serverResult = null;
+
+    // Fetch shape assignment from server
+    try {
+      const res = await fetch(`${this.serverUrl}/captcha/shape/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ siteKey: this.siteKey }),
+      });
+      if (!res.ok) throw new Error('Failed to start shape challenge');
+      const data = await res.json();
+      this.sessionId = data.sessionId;
+      this.shape = data.shape;
+    } catch {
+      throw new Error('Could not connect to captcha server.');
+    }
 
     // Show instruction
     ctx.instructionEl.innerHTML = '';
@@ -55,35 +80,123 @@ export class ShapeChallenge implements ChallengeInstance {
     ctx.instructionEl.appendChild(icon);
     ctx.instructionEl.appendChild(text);
 
-    this.capture.enable();
+    // Set up drawing handlers
+    this.handleDown = this.onPointerDown.bind(this);
+    this.handleMove = this.onPointerMove.bind(this);
+    this.handleUp = this.onPointerUp.bind(this);
+
+    ctx.canvas.addEventListener('pointerdown', this.handleDown);
+    ctx.canvas.addEventListener('pointermove', this.handleMove);
+    ctx.canvas.addEventListener('pointerup', this.handleUp);
+    ctx.canvas.addEventListener('pointerleave', this.handleUp);
+    ctx.canvas.style.touchAction = 'none';
+    ctx.canvas.style.cursor = 'crosshair';
   }
 
   stop(): void {
-    this.capture.disable();
+    this.drawing = false;
+    if (this.ctx) {
+      this.ctx.canvas.removeEventListener('pointerdown', this.handleDown);
+      this.ctx.canvas.removeEventListener('pointermove', this.handleMove);
+      this.ctx.canvas.removeEventListener('pointerup', this.handleUp);
+      this.ctx.canvas.removeEventListener('pointerleave', this.handleUp);
+      this.ctx.canvas.style.cursor = 'default';
+    }
   }
 
   reset(): void {
-    this.capture.disable();
-    this.capture.reset();
+    this.stop();
+    this.points = [];
+    this.drawing = false;
+    this.sessionId = null;
+    this.serverResult = null;
   }
 
   async analyze(): Promise<AnalysisResult> {
-    const points = this.capture.getPoints();
+    if (!this.sessionId) throw new Error('Challenge did not start properly.');
+    if (this.points.length < 15) throw new Error('Not enough drawing \u2014 please draw the complete shape.');
 
-    if (points.length < MIN_POINTS) {
-      throw new Error('Not enough drawing \u2014 please draw the complete shape.');
+    const res = await fetch(`${this.serverUrl}/captcha/shape/${this.sessionId}/verify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        points: this.points.map(p => ({ x: p.x, y: p.y, t: p.t })),
+        origin: window.location.origin,
+      }),
+    });
+
+    if (!res.ok) throw new Error('Server verification failed.');
+    const data = await res.json();
+
+    if (data.error && data.score === 0) {
+      throw new Error(
+        data.error.startsWith('shape_mismatch')
+          ? `That didn\u2019t look like a ${this.shape}. Try again!`
+          : 'Verification failed. Try again.'
+      );
     }
 
-    const result = analyzeDrawing(points, this.shape);
+    this.serverResult = data;
 
-    if (result.shapePerfection.matchScore < MIN_MATCH_SCORE) {
-      throw new Error(`That didn\u2019t look like a ${this.shape}. Try again!`);
-    }
+    return {
+      score: data.score,
+      behavioral: {
+        pointCount: this.points.length,
+        totalDuration: this.points.length > 1 ? this.points[this.points.length - 1].t - this.points[0].t : 0,
+        averageSpeed: 0, speedStdDev: 0, accelerationStdDev: 0,
+        timestampRegularity: 0, microJitterScore: 0, pauseCount: 0,
+      },
+      shapePerfection: {
+        shapeType: this.shape,
+        matchScore: data.score,
+        perfectionScore: 1 - data.score,
+        details: {},
+      },
+      verdict: data.verdict,
+    };
+  }
 
-    return result;
+  getServerToken(): string | null {
+    return this.serverResult?.token ?? null;
   }
 
   getPoints(): CapturePoint[] {
-    return this.capture.getPoints();
+    return this.points;
+  }
+
+  // --- Pointer event handlers ---
+
+  private getCoords(e: PointerEvent): { x: number; y: number } {
+    const rect = this.ctx.canvas.getBoundingClientRect();
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  }
+
+  private onPointerDown(e: PointerEvent): void {
+    this.drawing = true;
+    this.ctx.canvas.setPointerCapture(e.pointerId);
+    const { x, y } = this.getCoords(e);
+    this.points.push({ x, y, t: performance.now(), pressure: e.pressure });
+
+    this.ctx.ctx.strokeStyle = this.ctx.strokeColor;
+    this.ctx.ctx.lineWidth = 2.5;
+    this.ctx.ctx.lineCap = 'round';
+    this.ctx.ctx.lineJoin = 'round';
+    this.ctx.ctx.beginPath();
+    this.ctx.ctx.moveTo(x, y);
+  }
+
+  private onPointerMove(e: PointerEvent): void {
+    if (!this.drawing) return;
+    const { x, y } = this.getCoords(e);
+    this.points.push({ x, y, t: performance.now(), pressure: e.pressure });
+
+    this.ctx.ctx.lineTo(x, y);
+    this.ctx.ctx.stroke();
+    this.ctx.ctx.beginPath();
+    this.ctx.ctx.moveTo(x, y);
+  }
+
+  private onPointerUp(_e: PointerEvent): void {
+    this.drawing = false;
   }
 }

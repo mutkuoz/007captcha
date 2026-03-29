@@ -117,7 +117,7 @@ export function analyzeBallTracking(
   // --- Average distance & coverage ---
   const distances: number[] = [];
   let withinRange = 0;
-  const TRACKING_RANGE = 60;
+  const TRACKING_RANGE = 150;
 
   for (const p of cursorPoints) {
     const offset = p.t - cursorStartT;

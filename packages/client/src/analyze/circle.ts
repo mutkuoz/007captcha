@@ -88,7 +88,17 @@ export function analyzeCircle(points: CapturePoint[]): ShapePerfectionMetrics {
 
   // Closure: how close first and last points are (0 = perfectly closed, higher = open)
   // A closed circle should have closureGap < ~0.3 (relative to radius)
-  const closureComponent = closureGap < 0.3 ? 1 : closureGap < 0.6 ? 0.5 : closureGap < 1.0 ? 0.2 : 0;
+  // Hard fail: open shapes must not pass
+  if (closureGap > 0.25) {
+    return {
+      shapeType: 'circle',
+      matchScore: 0,
+      perfectionScore: 0,
+      details: { rmsError: normalizedRms, closureGap, radiusVariation, angularCoverage },
+    };
+  }
+
+  const closureComponent = closureGap < 0.2 ? 1 : closureGap < 0.35 ? 0.6 : 0.2;
 
   // Match score: does this look like a circle?
   // Require low RMS error AND low radius variation AND closed shape

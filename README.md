@@ -1,78 +1,172 @@
-# 007captcha
+<p align="center">
+  <img src="007-logo.png" alt="007captcha" width="180">
+</p>
 
-A behavioral captcha framework that catches bots through real-time interaction analysis.
+<h1 align="center">007captcha</h1>
 
-Users complete quick interactive challenges — drawing shapes, navigating mazes, or following a moving ball. The system analyzes behavioral signals (cursor jitter, reaction time, movement patterns) and challenge-specific metrics to determine if the user is human.
+<p align="center">
+  Behavioral captcha that catches bots through real-time interaction analysis.
+</p>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/@007captcha/client"><img src="https://img.shields.io/npm/v/@007captcha/client?label=%40007captcha%2Fclient&color=111827" alt="npm"></a>
+  <a href="https://www.npmjs.com/package/@007captcha/server"><img src="https://img.shields.io/npm/v/@007captcha/server?label=%40007captcha%2Fserver&color=111827" alt="npm"></a>
+  <a href="https://github.com/mutkuoz/007captcha/blob/main/LICENSE"><img src="https://img.shields.io/github/license/mutkuoz/007captcha?color=111827" alt="license"></a>
+  <a href="https://github.com/mutkuoz/007captcha/stargazers"><img src="https://img.shields.io/github/stars/mutkuoz/007captcha?style=flat&color=111827" alt="stars"></a>
+</p>
+
+---
+
+Users complete quick interactive challenges &mdash; following a moving ball, drawing shapes, or navigating mazes. Behind the scenes, the system analyzes how they move: cursor dynamics, reaction patterns, movement consistency, and challenge-specific signals that are extremely difficult for automated agents to replicate convincingly.
+
+All verification runs **server-side**. The client never holds scoring logic, detection parameters, or signing secrets. Tokens are HMAC-SHA256 signed, single-use, and expire automatically.
+
+**Zero runtime dependencies** across all packages.
+
+## Features
+
+- **Three challenge methods** &mdash; Ball following (real-time tracking), shape drawing, and maze navigation. Use one or randomize across all three.
+- **Fully server-side verification** &mdash; All scoring, detection, and token signing run on your server. The browser is a thin input-capture layer with no access to scoring logic or detection parameters.
+- **Real-time ball streaming** &mdash; Ball trajectories are computed tick-by-tick and streamed as rendered images via SSE. Future positions don't exist until generated. No video, no DOM elements, no extractable assets.
+- **Opaque challenges** &mdash; Mazes are delivered as PNG images. Shape types are assigned server-side. The client never sees wall data, solutions, or generation logic.
+- **HMAC-SHA256 tokens** &mdash; Single-use, signed server-side, auto-expire after 5 minutes. Verified with one function call.
+- **Zero runtime dependencies** &mdash; Server package uses only Node.js built-in `crypto`. No native modules, no C++ bindings, no external services.
+- **Framework-agnostic** &mdash; Vanilla JS via script tag, ES modules, or the `@007captcha/react` component. Works with any backend framework.
+- **Light & dark themes** &mdash; Built-in `'light'`, `'dark'`, and `'auto'` (follows system preference) themes.
+- **TypeScript-first** &mdash; Full type definitions shipped with every package.
 
 ## Challenge Methods
 
-### Ball Following *(recommended)*
+### Ball Following &nbsp;&mdash;&nbsp; *recommended*
 
-The most advanced method. A ball moves unpredictably across the canvas for 8 seconds — the user follows it with their cursor. The trajectory is generated **server-side in real-time** and streamed frame-by-frame via SSE, so future positions never exist on the client. An AI agent with full JavaScript access cannot read ahead.
+A ball moves unpredictably across a canvas for 8 seconds. The user follows it with their cursor. The trajectory is generated **server-side in real-time** and streamed frame-by-frame as rendered images via SSE &mdash; future positions never exist on the client. An AI agent with full JavaScript access cannot predict where the ball will go next.
 
-The system measures reaction lag, overshoot after direction changes, tracking distance variance, and cursor micro-jitter. Ball and background colors change randomly mid-challenge to prevent frame-matching attacks. Requires a server component (`@007captcha/server`).
+Ball and background colors change randomly mid-challenge to prevent frame-matching attacks. The canvas renders directly to `<canvas>` with no video element and no extractable DOM asset.
 
 ### Shape Drawing
 
-Users draw a random shape (circle, triangle, or square) on a canvas. The system analyzes drawing behavior and geometric perfection — humans draw imperfectly with natural jitter, while bots produce suspiciously perfect or suspiciously noisy shapes. Runs entirely client-side.
+The server assigns a random shape (circle, triangle, or square). The user draws it on a canvas. Their cursor path is sent to the server for analysis. The shape type is chosen server-side and the scoring never touches the browser.
 
-### Maze Solving
+### Maze Navigation
 
-A procedurally generated maze is rendered on a canvas. Users trace a path from entrance to exit with their cursor. The system checks wall crossings, path optimality, backtracking behavior, and movement patterns. The maze refreshes every 8 seconds. Runs entirely client-side.
-
-## How It Works
-
-1. User clicks "Start" and gets a random challenge (or a specific one via config)
-2. They complete the challenge within the time limit
-3. The system analyzes **behavioral signals** (speed variation, jitter, timing patterns) and **challenge-specific metrics** to produce a humanity score (0.0-1.0)
-4. A signed HMAC token is generated for server-side verification
-
-For ball challenges, the entire analysis runs server-side — the client only sends cursor positions back after the challenge ends.
+A procedurally generated maze is rendered server-side and sent to the client as a PNG image. The user traces a path from entrance to exit. Their cursor path is sent back to the server, which holds the maze structure, solution, and wall positions. The client only ever sees a flat image.
 
 ## Quick Start
 
-### Script Tag
+### 1. Install
+
+```bash
+pnpm add @007captcha/client @007captcha/server
+```
+
+### 2. Server
+
+All three challenge methods require a server component. Here's a minimal Express setup:
+
+```js
+import express from 'express';
+import {
+  verify,
+  BallChallengeManager,
+  MazeChallengeManager,
+  ShapeChallengeManager,
+} from '@007captcha/server';
+
+const app = express();
+const SECRET = process.env.CAPTCHA_SECRET || 'change-me';
+
+const ball  = new BallChallengeManager(SECRET);
+const maze  = new MazeChallengeManager(SECRET);
+const shape = new ShapeChallengeManager(SECRET);
+
+app.use(express.json());
+
+// — Ball (3 endpoints) —
+app.post('/captcha/ball/start', (req, res) => {
+  res.json(ball.createSession());
+});
+
+app.get('/captcha/ball/:id/stream', (req, res) => {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+  });
+  let done = false;
+  const ok = ball.startStreaming(
+    req.params.id,
+    (frame) => res.write(`event: frame\ndata: ${JSON.stringify(frame)}\n\n`),
+    ()      => { done = true; res.write('event: end\ndata: {}\n\n'); res.end(); },
+  );
+  if (!ok) { res.end(); return; }
+  req.on('close', () => { if (!done) ball.cancelSession(req.params.id); });
+});
+
+app.post('/captcha/ball/:id/verify', (req, res) => {
+  const { points, cursorStartT, origin } = req.body;
+  res.json(ball.verify(req.params.id, points || [], cursorStartT || 0, origin || ''));
+});
+
+// — Maze (2 endpoints) —
+app.post('/captcha/maze/start', (req, res) => res.json(maze.createSession()));
+app.post('/captcha/maze/:id/verify', (req, res) => {
+  const { points, origin } = req.body;
+  res.json(maze.verify(req.params.id, points || [], origin || ''));
+});
+
+// — Shape (2 endpoints) —
+app.post('/captcha/shape/start', (req, res) => res.json(shape.createSession()));
+app.post('/captcha/shape/:id/verify', (req, res) => {
+  const { points, origin } = req.body;
+  res.json(shape.verify(req.params.id, points || [], origin || ''));
+});
+
+// — Token verification (all methods) —
+app.post('/verify', async (req, res) => {
+  res.json(await verify(req.body.token || '', SECRET));
+});
+
+app.listen(3007);
+```
+
+### 3. Client
 
 ```html
 <div id="captcha"></div>
 <script src="https://unpkg.com/@007captcha/client/dist/umd/index.global.js"></script>
 <script>
   OOSevenCaptcha.render({
-    siteKey: 'your-site-key',
+    siteKey: 'change-me',
     container: '#captcha',
-    method: 'ball',         // 'random' | 'shape' | 'maze' | 'ball'
-    serverUrl: '/captcha',  // required for ball challenges
-    onSuccess: function(token) {
-      console.log('Token:', token);
-    }
+    method: 'ball',
+    serverUrl: window.location.origin,
+    onSuccess(token) {
+      // Send token to your backend for verification
+      fetch('/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token }),
+      });
+    },
   });
 </script>
 ```
 
-### npm / pnpm
+Or with ES modules:
 
-```bash
-pnpm add @007captcha/client
-```
-
-```typescript
+```ts
 import { render } from '@007captcha/client';
 
 const widget = render({
-  siteKey: 'your-site-key',
+  siteKey: 'change-me',
   container: '#captcha',
   method: 'ball',
   serverUrl: window.location.origin,
-  onSuccess: (token) => {
-    fetch('/api/verify', {
-      method: 'POST',
-      body: JSON.stringify({ token }),
-    });
-  },
+  onSuccess: (token) => { /* send to server */ },
 });
 ```
 
-### React
+### 4. React
 
 ```bash
 pnpm add @007captcha/client @007captcha/react
@@ -84,208 +178,122 @@ import { OOSevenCaptcha } from '@007captcha/react';
 function App() {
   return (
     <OOSevenCaptcha
-      siteKey="your-site-key"
+      siteKey="change-me"
       method="ball"
       serverUrl={window.location.origin}
-      onSuccess={(token) => console.log(token)}
+      onSuccess={(token) => { /* send to server */ }}
     />
   );
 }
 ```
 
-## Server Setup
+## Server-Side Verification
 
-### Token Verification (all methods)
+After a challenge completes, the client receives a signed token. Send it to your backend and verify:
 
-```bash
-pnpm add @007captcha/server
-```
-
-```typescript
+```ts
 import { verify } from '@007captcha/server';
 
-const result = await verify(token, 'your-site-key');
+const result = await verify(token, SECRET);
 
 if (result.success) {
-  console.log('Method:', result.method);       // 'shape' | 'maze' | 'ball'
-  console.log('Challenge:', result.challenge);  // 'circle', 'triangle', 'square', 'maze', 'ball'
-  console.log('Score:', result.score);          // 0.0-1.0
-  console.log('Verdict:', result.verdict);      // 'human' | 'uncertain' | 'bot'
-} else {
-  console.log('Error:', result.error);
+  // result.score    — 0.0 (bot) to 1.0 (human)
+  // result.verdict  — 'human', 'uncertain', or 'bot'
+  // result.method   — 'shape', 'maze', or 'ball'
 }
 ```
 
-### Ball Challenge Endpoints (required for ball method)
-
-The ball challenge needs three server endpoints. Here's an Express example:
-
-```typescript
-import express from 'express';
-import { BallChallengeManager } from '@007captcha/server';
-
-const app = express();
-const ballManager = new BallChallengeManager('your-site-key');
-
-app.use(express.json());
-
-// 1. Create session
-app.post('/captcha/ball/start', (req, res) => {
-  const { sessionId, visuals } = ballManager.createSession();
-  res.json({ sessionId, visuals });
-});
-
-// 2. SSE stream — sends ball positions in real-time
-app.get('/captcha/ball/:id/stream', (req, res) => {
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    Connection: 'keep-alive',
-  });
-
-  const started = ballManager.startStreaming(
-    req.params.id,
-    (frame) => res.write(`event: frame\ndata: ${JSON.stringify(frame)}\n\n`),
-    () => { res.write('event: end\ndata: {}\n\n'); res.end(); },
-    (visuals) => res.write(`event: colorChange\ndata: ${JSON.stringify(visuals)}\n\n`),
-  );
-
-  if (!started) { res.end(); return; }
-  req.on('close', () => ballManager.cancelSession(req.params.id));
-});
-
-// 3. Verify cursor points against recorded trajectory
-app.post('/captcha/ball/:id/verify', (req, res) => {
-  const { points, cursorStartT, origin } = req.body;
-  res.json(ballManager.verify(req.params.id, points, cursorStartT, origin));
-});
-```
+Tokens are single-use and expire after 5 minutes.
 
 ## Configuration
 
-### Client Options
-
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `siteKey` | `string` | required | Your site key (shared secret for HMAC token signing) |
-| `container` | `string \| HTMLElement` | required | CSS selector or DOM element to mount the widget |
-| `method` | `'random' \| 'shape' \| 'maze' \| 'ball'` | `'random'` | Which challenge to use |
-| `serverUrl` | `string` | — | Server URL for ball challenge endpoints (required for `'ball'`) |
-| `theme` | `'light' \| 'dark' \| 'auto'` | `'light'` | Widget color theme |
-| `timeLimit` | `number` | varies | Time limit in ms (shape: 10s, maze: 8s, ball: 14s) |
-| `onSuccess` | `(token: string) => void` | — | Called when challenge passes |
-| `onFailure` | `(error: Error) => void` | — | Called when challenge fails |
-| `onExpired` | `() => void` | — | Called when token expires |
+| `siteKey` | `string` | *required* | Shared secret for HMAC token signing |
+| `container` | `string \| HTMLElement` | *required* | CSS selector or DOM element to mount the widget |
+| `method` | `'ball' \| 'shape' \| 'maze' \| 'random'` | `'random'` | Challenge method |
+| `serverUrl` | `string` | *required* | Base URL for challenge endpoints |
+| `theme` | `'light' \| 'dark' \| 'auto'` | `'light'` | Color theme |
+| `timeLimit` | `number` | *varies* | Time limit in ms |
+| `onSuccess` | `(token: string) => void` | &mdash; | Called when challenge passes |
+| `onFailure` | `(error: Error) => void` | &mdash; | Called when challenge fails |
+| `onExpired` | `() => void` | &mdash; | Called when token expires |
 
-> When `method` is `'random'`, ball challenges are only included in the pool if `serverUrl` is provided.
+### Widget Instance
 
-### Widget Methods
-
-```typescript
+```ts
 const widget = render({ ... });
-widget.getToken();  // Get the current token
-widget.reset();     // Reset for a new challenge
-widget.destroy();   // Remove the widget from DOM
+
+widget.getToken()   // Current verification token
+widget.reset()      // Reset for a new challenge
+widget.destroy()    // Remove widget from DOM
 ```
-
-## Detection Signals
-
-### Behavioral Analysis
-
-Shared across all challenge methods. Analyzes raw cursor movement patterns.
-
-| Signal | Human | Bot |
-|--------|-------|-----|
-| Point count | 200-600 events | <20 events |
-| Speed variation | High CV (>0.4) | Low CV (<0.1) |
-| Acceleration | Natural variation | Near-zero |
-| Timing intervals | Irregular (5-20ms std dev) | Perfectly regular (<1ms std dev) |
-| Micro-jitter | Natural hand tremor | Absent or synthetic |
-| Pauses | At corners/direction changes | None |
-
-### Ball Tracking (ball method)
-
-Server-side analysis of how the cursor follows the ball. This is the hardest set of signals for bots to fake because the ball trajectory doesn't exist until the server computes it in real-time.
-
-| Signal | Human | Bot |
-|--------|-------|-----|
-| Tracking distance | 10-50px average | <5px (locked on) |
-| Distance variance | High std dev | Near-zero |
-| Reaction lag | 100-400ms | <50ms |
-| Lag consistency | Variable across time windows | Constant |
-| Overshoot | Frequent after direction changes | Absent |
-| Tracking coverage | 60-90% of time within range | >95% |
-
-### Shape Perfection (shape method)
-
-| Shape | What's Measured |
-|-------|----------------|
-| Circle | RMS error from best-fit circle, radius variation, angular coverage, closure |
-| Triangle | Angle uniformity, side length consistency, edge straightness, closure |
-| Square | 90-degree angle accuracy, side uniformity, parallelism, edge straightness, closure |
-
-### Maze Analysis (maze method)
-
-| Signal | Human | Bot |
-|--------|-------|-----|
-| Wall crossings | 0-2 (minor brushes) | Many (ignoring walls) |
-| Path straightness | Low (winding, exploring) | High (direct line) |
-| Optimal path ratio | 1.5-4x shortest path | ~1.0x (too perfect) |
-| Backtracking | Some (dead ends) | None |
-
-### Scoring
-
-Each method combines behavioral analysis (50-60%) with challenge-specific metrics (40-50%) into a single score.
-
-| Score | Verdict | Result |
-|-------|---------|--------|
-| 0.0-0.3 | `bot` | Challenge fails |
-| 0.3-0.7 | `uncertain` | Challenge passes |
-| 0.7-1.0 | `human` | Challenge passes |
 
 ## Packages
 
 | Package | Description |
 |---------|-------------|
-| `@007captcha/client` | Client widget, rendering, and analysis for shape/maze challenges |
-| `@007captcha/server` | Token verification + ball challenge session manager |
-| `@007captcha/react` | React component wrapper |
+| [`@007captcha/client`](packages/client) | Browser widget &mdash; renders challenges, captures input, communicates with server |
+| [`@007captcha/server`](packages/server) | Node.js backend &mdash; session management, analysis, token signing & verification |
+| [`@007captcha/react`](packages/react) | React component wrapper |
 
-All packages have **zero runtime dependencies**.
+## Security Model
+
+- **Server-side analysis** &mdash; All scoring, detection, and token signing happen on the server. The client is a thin rendering layer that captures cursor input and sends it back.
+- **No client secrets** &mdash; The browser never holds detection logic, scoring thresholds, or signing keys.
+- **Real-time streaming** &mdash; Ball positions are computed tick-by-tick on the server and streamed as rendered images. Future positions don't exist until each frame is generated.
+- **Opaque challenges** &mdash; Mazes are sent as PNG images. The client has no access to wall positions, solutions, or cell data. Shape assignments come from the server with no local shape generation.
+- **HMAC-SHA256 tokens** &mdash; Single-use, signed server-side, 5-minute expiry.
+- **Canvas rendering** &mdash; No `<video>`, no extractable DOM assets, no readable coordinates in the markup.
 
 ## Examples
 
-- [`examples/vanilla-html/`](examples/vanilla-html/) — HTML page with script tag (shape/maze)
-- [`examples/express-server/`](examples/express-server/) — Express.js with all three methods, SSE streaming, and server-side verification
+| Example | Description |
+|---------|-------------|
+| [`examples/express-server/`](examples/express-server/) | Express.js with all three methods, SSE streaming, and full verification |
+| [`examples/react-app/`](examples/react-app/) | Vite + React with method picker and server-side verification |
+| [`examples/vanilla-html/`](examples/vanilla-html/) | Minimal HTML page with script tag |
 
-## Security
-
-**Ball challenge (strongest):** The trajectory is computed server-side tick-by-tick. Future ball positions don't exist until each frame is generated. The client receives positions via SSE and renders to `<canvas>` — no video, no DOM element, no extractable asset. Colors change randomly mid-challenge. An AI agent with full JS access cannot predict where the ball will go next.
-
-**Token signing:** All tokens use HMAC-SHA256. For shape/maze, the client signs the token. For ball, the server signs it — the client never holds the secret.
-
-**Token expiry:** Tokens are single-use and expire after 5 minutes.
-
-**Behavioral analysis:** Cursor speed variation, micro-jitter, timing irregularity, and pause patterns are hard to replicate even for sophisticated bots that study the detection algorithms.
-
-## Try It
+### Run the Express Demo
 
 ```bash
 pnpm install
 pnpm demo
+# → http://localhost:3007
 ```
 
-Opens a demo server at `http://localhost:3007` with a method picker (shape, maze, ball) and server-side verification. All three methods work out of the box — the ball challenge SSE endpoints are included.
+### Run the React Demo
+
+```bash
+pnpm build
+cd examples/react-app
+pnpm install
+pnpm dev
+# → Vite on http://localhost:5173, API on http://localhost:3007
+```
+
+All demos include a method picker (shape, maze, ball, random) and server-side verification out of the box.
 
 ## Development
 
 ```bash
-pnpm install          # install dependencies
-pnpm test             # run all tests
-pnpm -r run build     # build all packages
-pnpm demo             # build + start demo server
+pnpm install          # Install dependencies
+pnpm build            # Build all packages
+pnpm test             # Run tests
+pnpm test:watch       # Watch mode
+pnpm demo             # Build + start demo server
 ```
+
+## Star History
+
+<a href="https://star-history.com/#mutkuoz/007captcha&Date">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=mutkuoz/007captcha&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=mutkuoz/007captcha&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=mutkuoz/007captcha&type=Date" />
+ </picture>
+</a>
 
 ## License
 
-MIT
+[MIT](LICENSE)

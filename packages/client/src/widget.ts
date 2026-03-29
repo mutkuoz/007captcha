@@ -1,7 +1,6 @@
-import type { CaptchaConfig, TokenPayload } from './types';
+import type { CaptchaConfig } from './types';
 import type { ChallengeInstance } from './challenge';
 import { createChallenge } from './challenges';
-import { createToken, hashPoints } from './token';
 import { STYLES } from './styles';
 
 type WidgetState = 'ready' | 'drawing' | 'analyzing' | 'success' | 'fail';
@@ -167,8 +166,8 @@ export class CaptchaWidget {
 
   private setupCanvas(): void {
     const dpr = window.devicePixelRatio || 1;
-    const width = 308;
-    const height = 260;
+    const width = 480;
+    const height = 400;
     this.canvas.width = width * dpr;
     this.canvas.height = height * dpr;
     this.canvas.style.width = `${width}px`;
@@ -290,30 +289,8 @@ export class CaptchaWidget {
     try {
       const result = await this.challenge.analyze();
 
-      let token: string;
-
-      if (this.challenge.getMethod() === 'ball') {
-        // Ball challenge: token comes from server (set during analyze())
-        const ballChallenge = this.challenge as import('./challenges/ball').BallChallenge;
-        token = ballChallenge.getServerToken() || '';
-      } else {
-        // Shape/maze: token created client-side
-        const points = this.challenge.getPoints();
-        const ph = await hashPoints(points);
-
-        const payload: TokenPayload = {
-          cid: this.challengeId,
-          method: this.challenge.getMethod(),
-          challenge: this.challenge.getChallengeId(),
-          score: result.score,
-          verdict: result.verdict,
-          ts: Date.now(),
-          ph,
-          origin: typeof window !== 'undefined' ? window.location.origin : '',
-        };
-
-        token = await createToken(payload, this.config.siteKey);
-      }
+      // All challenges are server-verified — token comes from the server
+      const token = this.challenge.getServerToken?.() ?? '';
 
       this.hiddenInput.value = token;
 

@@ -7,7 +7,7 @@ function normalize(value: number, min: number, max: number): number {
 
 // --- Behavioral analysis (server-side version, same logic as client) ---
 
-interface BehavioralMetrics {
+export interface BehavioralMetrics {
   pointCount: number;
   totalDuration: number;
   averageSpeed: number;
@@ -89,7 +89,7 @@ export function analyzeBehavior(points: CursorPoint[]): BehavioralMetrics {
   };
 }
 
-function scoreBehavioral(m: BehavioralMetrics): number {
+export function scoreBehavioral(m: BehavioralMetrics): number {
   const pointScore = normalize(m.pointCount, 10, 200);
   const speedCV = m.averageSpeed > 0 ? m.speedStdDev / m.averageSpeed : 0;
   const speedScore = normalize(speedCV, 0.05, 0.6);
@@ -109,37 +109,43 @@ function scoreBehavioral(m: BehavioralMetrics): number {
 }
 
 function scoreBallTracking(m: BallAnalysisMetrics): number {
+  // Distance: humans are imprecise — average 30-120px is normal.
+  // Only penalize very tight (bot-like) or very far (not following).
   let distanceScore: number;
-  if (m.averageDistance < 5) distanceScore = 0.1;
-  else if (m.averageDistance < 10) distanceScore = 0.5;
-  else if (m.averageDistance <= 50) distanceScore = 1.0;
-  else if (m.averageDistance <= 100) distanceScore = 0.5;
-  else distanceScore = 0.0;
+  if (m.averageDistance < 5) distanceScore = 0.1;       // suspiciously accurate
+  else if (m.averageDistance < 15) distanceScore = 0.6;  // maybe bot, maybe skilled
+  else if (m.averageDistance <= 140) distanceScore = 1.0; // human range
+  else if (m.averageDistance <= 220) distanceScore = 0.5; // poor tracking but trying
+  else distanceScore = 0.0;                               // not following
 
-  const distVariationScore = normalize(m.distanceStdDev, 5, 30);
+  // Distance variation: humans have variable distance, bots are steady
+  const distVariationScore = normalize(m.distanceStdDev, 3, 25);
 
+  // Lag: humans react in 100-500ms. With 20fps frames there's inherent display lag.
   let lagScore: number;
-  if (m.estimatedLag < 30) lagScore = 0.0;
-  else if (m.estimatedLag < 80) lagScore = 0.3;
-  else if (m.estimatedLag <= 500) lagScore = 1.0;
-  else lagScore = 0.3;
+  if (m.estimatedLag < 20) lagScore = 0.0;        // bot — reacting before seeing
+  else if (m.estimatedLag < 60) lagScore = 0.4;   // suspicious
+  else if (m.estimatedLag <= 600) lagScore = 1.0;  // human range (wide)
+  else lagScore = 0.4;                              // very delayed but still moving
 
   const lagConsistencyScore = normalize(m.lagConsistency, 5, 60);
-  const overshootScore = normalize(m.overshootCount, 0, 5);
+  const overshootScore = normalize(m.overshootCount, 0, 4);
 
+  // Coverage: fraction of time within tracking range (150px).
+  // Humans casually following will be within range most of the time.
   let coverageScore: number;
-  if (m.trackingCoverage < 0.3) coverageScore = 0.0;
-  else if (m.trackingCoverage < 0.4) coverageScore = 0.4;
-  else if (m.trackingCoverage <= 0.95) coverageScore = 1.0;
-  else coverageScore = 0.3;
+  if (m.trackingCoverage < 0.15) coverageScore = 0.0;  // not following at all
+  else if (m.trackingCoverage < 0.3) coverageScore = 0.4;
+  else if (m.trackingCoverage <= 0.97) coverageScore = 1.0;
+  else coverageScore = 0.4; // suspiciously perfect
 
   return (
-    distanceScore * 0.25 +
+    distanceScore * 0.20 +
     distVariationScore * 0.15 +
-    lagScore * 0.25 +
+    lagScore * 0.20 +
     lagConsistencyScore * 0.15 +
     overshootScore * 0.10 +
-    coverageScore * 0.10
+    coverageScore * 0.20
   );
 }
 
@@ -163,8 +169,8 @@ export function computeBallScore(
   const score = Math.max(0, Math.min(1, 0.50 * behavScore + 0.50 * ballScore));
 
   let verdict: 'bot' | 'human' | 'uncertain';
-  if (score < 0.3) verdict = 'bot';
-  else if (score > 0.7) verdict = 'human';
+  if (score < 0.25) verdict = 'bot';
+  else if (score > 0.45) verdict = 'human';
   else verdict = 'uncertain';
 
   return { score, verdict };

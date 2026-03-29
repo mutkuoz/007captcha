@@ -11,11 +11,21 @@ function normalize(value: number, min: number, max: number): number {
  * Returns 0 (bot) to 1 (human).
  */
 function scoreMaze(m: MazeAnalysisMetrics): number {
-  // Wall crossings: 0 = fine, 1-2 = mild penalty, >3 = strong bot signal
+  // Hard fail: more than 3 wall crossings means you're cutting through walls
+  if (m.wallCrossings > 3) return 0;
+
+  // Hard fail: 5+ wall touches — you're scraping along walls
+  if (m.wallTouches >= 5) return 0;
+
+  // Wall crossings: 0 = fine, 1-2 = mild penalty, 3 = strong penalty
   const wallScore = m.wallCrossings === 0 ? 1.0
-    : m.wallCrossings <= 2 ? 0.6
-    : m.wallCrossings <= 5 ? 0.2
-    : 0;
+    : m.wallCrossings === 1 ? 0.7
+    : m.wallCrossings === 2 ? 0.4
+    : 0.15;
+
+  // Wall touches: each consecutive touch drops score harder (exponential decay)
+  // 0 → 1.0, 1 → 0.7, 2 → 0.45, 3 → 0.25, 4 → 0.1
+  const touchScore = Math.pow(0.7, m.wallTouches);
 
   // Path straightness: low = human (winding path), high = bot (direct path)
   // Inverted: human paths are winding (straightness < 0.5)
@@ -37,9 +47,10 @@ function scoreMaze(m: MazeAnalysisMetrics): number {
   const exitFactor = m.reachedExit ? 1.0 : 0.0;
 
   const raw = (
-    wallScore * 0.30 +
-    straightScore * 0.25 +
-    optimalScore * 0.25 +
+    wallScore * 0.25 +
+    touchScore * 0.15 +
+    straightScore * 0.20 +
+    optimalScore * 0.20 +
     backtrackScore * 0.20
   );
 

@@ -1,8 +1,23 @@
-# @007captcha/server
+<p align="center">
+  <img src="../../007-logo.png" alt="007captcha" width="120">
+</p>
 
-Server-side token verification and ball challenge session management for 007captcha.
+<h1 align="center">@007captcha/server</h1>
 
-Zero runtime dependencies — uses only Node.js built-in `crypto`.
+<p align="center">
+  Server-side session management, analysis, and token verification for 007captcha.
+</p>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/@007captcha/server"><img src="https://img.shields.io/npm/v/@007captcha/server?color=111827" alt="npm"></a>
+  <a href="https://github.com/mutkuoz/007captcha/blob/main/LICENSE"><img src="https://img.shields.io/github/license/mutkuoz/007captcha?color=111827" alt="license"></a>
+</p>
+
+---
+
+Handles everything security-sensitive: challenge generation, behavioral analysis, scoring, and HMAC-SHA256 token signing. The client widget acts as a thin rendering layer &mdash; all verification logic runs here.
+
+**Zero runtime dependencies.** Uses only Node.js built-in `crypto`.
 
 ## Installation
 
@@ -12,18 +27,15 @@ pnpm add @007captcha/server
 
 ## Token Verification
 
-Verifies signed tokens from any challenge method (shape, maze, or ball).
+Verify signed tokens from any challenge method:
 
-```typescript
+```ts
 import { verify } from '@007captcha/server';
 
-const result = await verify(token, 'your-site-key');
+const result = await verify(token, SECRET);
 
 if (result.success) {
-  console.log('Method:', result.method);       // 'shape' | 'maze' | 'ball'
-  console.log('Challenge:', result.challenge);  // e.g. 'circle', 'maze', 'ball'
-  console.log('Score:', result.score);          // 0.0-1.0
-  console.log('Verdict:', result.verdict);      // 'human' | 'uncertain' | 'bot'
+  // Allow the request
 }
 ```
 
@@ -31,115 +43,146 @@ if (result.success) {
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `success` | `boolean` | `true` if signature is valid and verdict is not `'bot'` |
+| `success` | `boolean` | `true` if valid signature and not flagged as bot |
 | `score` | `number` | 0.0 (bot) to 1.0 (human) |
 | `method` | `string` | `'shape'`, `'maze'`, or `'ball'` |
-| `challenge` | `string` | Specific challenge (e.g. `'circle'`, `'maze'`, `'ball'`) |
+| `challenge` | `string` | Specific challenge identifier |
 | `verdict` | `string` | `'human'`, `'uncertain'`, or `'bot'` |
-| `timestamp` | `number` | When the challenge was completed (ms since epoch) |
-| `error` | `string?` | Error message if verification failed |
+| `timestamp` | `number` | When the challenge was completed |
+| `error` | `string?` | Reason if verification failed |
 
-Tokens expire after 5 minutes.
+Tokens are single-use and expire after 5 minutes.
 
-## Ball Challenge Manager
+## Challenge Managers
 
-Manages server-side ball challenge sessions. Required when using the `'ball'` challenge method.
+Each challenge method has a session manager that handles the full lifecycle: session creation, challenge delivery, input analysis, and token signing. Create one instance per server process.
 
-The ball trajectory is computed in real-time via a physics simulation running on the server. Each frame is streamed to the client as it's generated — **future positions never exist until each tick computes them**. After the challenge, the user's cursor path is compared against the recorded trajectory to detect bots.
+### Ball &mdash; `BallChallengeManager`
 
-```typescript
+The ball challenge generates a physics-based trajectory in real-time and streams rendered frames to the client via SSE. After the challenge, the user's cursor path is analyzed against the recorded trajectory.
+
+```ts
 import { BallChallengeManager } from '@007captcha/server';
-
-const manager = new BallChallengeManager('your-site-key', {
-  durationMs: 8000, // simulation length in ms (default: 8000)
-});
+const ball = new BallChallengeManager(SECRET);
 ```
 
-Create one instance per server process. Sessions are stored in memory and auto-expire after 60 seconds.
+**Endpoints required:**
 
-### `createSession(): { sessionId, visuals }`
+| Method | Path | Handler |
+|--------|------|---------|
+| `POST` | `/captcha/ball/start` | `ball.createSession()` |
+| `GET` | `/captcha/ball/:id/stream` | `ball.startStreaming(id, onFrame, onEnd)` |
+| `POST` | `/captcha/ball/:id/verify` | `ball.verify(id, points, cursorStartT, origin)` |
 
-Creates a new challenge session. Returns a unique session ID and the initial visual configuration (ball color, background color, ball shape) — all randomly selected from high-contrast pairs.
+### Maze &mdash; `MazeChallengeManager`
 
-### `startStreaming(sessionId, onFrame, onEnd, onColorChange?): boolean`
+Generates a procedural maze, renders it as a PNG, and solves it server-side. The client receives only the image and zone coordinates. Cursor path analysis runs entirely on the server.
 
-Starts the real-time physics simulation for a session.
+```ts
+import { MazeChallengeManager } from '@007captcha/server';
+const maze = new MazeChallengeManager(SECRET);
+```
 
-- `onFrame({ x, y, t })` — called at ~60fps with the ball's current position
-- `onEnd()` — called when the 8-second simulation finishes
-- `onColorChange(visuals)` — called when ball/background colors change mid-challenge (random intervals)
+**Endpoints required:**
 
-Returns `false` if the session doesn't exist or was already started.
+| Method | Path | Handler |
+|--------|------|---------|
+| `POST` | `/captcha/maze/start` | `maze.createSession()` |
+| `POST` | `/captcha/maze/:id/verify` | `maze.verify(id, points, origin)` |
 
-### `verify(sessionId, cursorPoints, cursorStartT, origin): BallVerifyResult`
+### Shape &mdash; `ShapeChallengeManager`
 
-Compares the user's cursor path against the recorded ball trajectory. Analyzes:
+Assigns a random shape (circle, triangle, or square) and analyzes the user's drawing server-side. The client only knows which shape to draw &mdash; scoring and detection run here.
 
-- **Tracking distance** — average distance between cursor and ball (humans: 10-50px, bots: <5px)
-- **Reaction lag** — cross-correlation based lag estimate (humans: 100-400ms, bots: <50ms)
-- **Lag consistency** — variation across time windows (humans: variable, bots: constant)
-- **Overshoot** — cursor continues old direction after ball changes (humans overshoot, bots don't)
-- **Behavioral signals** — cursor speed variation, jitter, timing regularity, pauses
+```ts
+import { ShapeChallengeManager } from '@007captcha/server';
+const shape = new ShapeChallengeManager(SECRET);
+```
 
-Returns `{ success, score, verdict, token }`. The token is HMAC-SHA256 signed and can be verified with `verify()`.
+**Endpoints required:**
 
-### `cancelSession(sessionId): void`
+| Method | Path | Handler |
+|--------|------|---------|
+| `POST` | `/captcha/shape/start` | `shape.createSession()` |
+| `POST` | `/captcha/shape/:id/verify` | `shape.verify(id, points, origin)` |
 
-Stops the physics simulation and removes the session. Call this when the client disconnects.
+## Express Integration
 
-### `destroy(): void`
+Full working example with all three methods:
 
-Stops all active sessions and the background cleanup timer. Call on server shutdown.
-
-### Express Example
-
-```typescript
+```js
 import express from 'express';
-import { BallChallengeManager, verify } from '@007captcha/server';
+import {
+  verify,
+  BallChallengeManager,
+  MazeChallengeManager,
+  ShapeChallengeManager,
+} from '@007captcha/server';
 
 const app = express();
-const manager = new BallChallengeManager('your-site-key');
+const SECRET = process.env.CAPTCHA_SECRET;
+
+const ball  = new BallChallengeManager(SECRET);
+const maze  = new MazeChallengeManager(SECRET);
+const shape = new ShapeChallengeManager(SECRET);
 
 app.use(express.json());
 
-// Create a new ball challenge session
+// Ball
 app.post('/captcha/ball/start', (req, res) => {
-  const { sessionId, visuals } = manager.createSession();
-  res.json({ sessionId, visuals });
+  res.json(ball.createSession());
 });
 
-// SSE stream: send ball positions in real-time
 app.get('/captcha/ball/:id/stream', (req, res) => {
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
     Connection: 'keep-alive',
   });
-
-  const started = manager.startStreaming(
+  let done = false;
+  const ok = ball.startStreaming(
     req.params.id,
     (frame) => res.write(`event: frame\ndata: ${JSON.stringify(frame)}\n\n`),
-    () => { res.write('event: end\ndata: {}\n\n'); res.end(); },
-    (visuals) => res.write(`event: colorChange\ndata: ${JSON.stringify(visuals)}\n\n`),
+    ()      => { done = true; res.write('event: end\ndata: {}\n\n'); res.end(); },
   );
-
-  if (!started) { res.end(); return; }
-  req.on('close', () => manager.cancelSession(req.params.id));
+  if (!ok) { res.end(); return; }
+  req.on('close', () => { if (!done) ball.cancelSession(req.params.id); });
 });
 
-// Verify cursor points against recorded trajectory
 app.post('/captcha/ball/:id/verify', (req, res) => {
   const { points, cursorStartT, origin } = req.body;
-  res.json(manager.verify(req.params.id, points, cursorStartT, origin));
+  res.json(ball.verify(req.params.id, points || [], cursorStartT || 0, origin || ''));
 });
 
-// Verify any token (shape, maze, or ball)
-app.post('/verify', async (req, res) => {
-  const result = await verify(req.body.token, 'your-site-key');
-  res.json(result);
+// Maze
+app.post('/captcha/maze/start', (req, res) => res.json(maze.createSession()));
+app.post('/captcha/maze/:id/verify', (req, res) => {
+  res.json(maze.verify(req.params.id, req.body.points || [], req.body.origin || ''));
 });
+
+// Shape
+app.post('/captcha/shape/start', (req, res) => res.json(shape.createSession()));
+app.post('/captcha/shape/:id/verify', (req, res) => {
+  res.json(shape.verify(req.params.id, req.body.points || [], req.body.origin || ''));
+});
+
+// Token verification
+app.post('/verify', async (req, res) => {
+  res.json(await verify(req.body.token || '', SECRET));
+});
+
+app.listen(3007);
 ```
+
+See [`examples/express-server/`](../../examples/express-server/) for the full demo with a UI.
+
+## Session Lifecycle
+
+- Sessions are stored in memory and auto-expire (60s for ball/shape, 120s for maze).
+- Each session can only be verified once.
+- Call `manager.destroy()` on server shutdown to clean up timers.
+- For horizontally scaled deployments, sessions are per-process &mdash; route challenge requests to the same instance (sticky sessions or a shared store).
 
 ## License
 
-MIT
+[MIT](../../LICENSE)

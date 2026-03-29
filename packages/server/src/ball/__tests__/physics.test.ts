@@ -31,9 +31,9 @@ describe('BallPhysics', () => {
 
     for (const f of frames) {
       expect(f.x).toBeGreaterThanOrEqual(0);
-      expect(f.x).toBeLessThanOrEqual(308);
+      expect(f.x).toBeLessThanOrEqual(480);
       expect(f.y).toBeGreaterThanOrEqual(0);
-      expect(f.y).toBeLessThanOrEqual(260);
+      expect(f.y).toBeLessThanOrEqual(400);
     }
   });
 
@@ -44,7 +44,7 @@ describe('BallPhysics', () => {
       physics.start(() => {}, () => resolve());
     });
 
-    expect(physics.changeEvents.length).toBeGreaterThan(2);
+    expect(physics.changeEvents.length).toBeGreaterThanOrEqual(2);
   });
 
   it('should stop early when stop() is called', async () => {
@@ -78,9 +78,9 @@ describe('BallPhysics', () => {
   it('should record start position', () => {
     const physics = new BallPhysics();
     expect(physics.startX).toBeGreaterThan(0);
-    expect(physics.startX).toBeLessThan(308);
+    expect(physics.startX).toBeLessThan(480);
     expect(physics.startY).toBeGreaterThan(0);
-    expect(physics.startY).toBeLessThan(260);
+    expect(physics.startY).toBeLessThan(400);
   });
 
   it('should record color change times matching callback invocations', async () => {

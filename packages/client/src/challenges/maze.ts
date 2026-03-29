@@ -1,66 +1,72 @@
 import type { ChallengeContext, ChallengeInstance } from '../challenge';
-import type { ChallengeMethod, CapturePoint, MazeDefinition, AnalysisResult } from '../types';
-import { generateMaze } from '../maze/generate';
-import { renderMaze, getMazeOffset } from '../maze/render';
-import { solveMaze } from '../maze/solve';
-import { analyzeMazePath } from '../maze/analyze';
-import { analyzeBehavior } from '../analyze/behavioral';
-import { computeMazeScore } from '../maze/scoring';
+import type { ChallengeMethod, CapturePoint, AnalysisResult } from '../types';
 
-const MAZE_ROWS = 13;
-const MAZE_COLS = 15;
-const CELL_SIZE = 18;
+interface ZoneRect { x: number; y: number; width: number; height: number }
 
+/**
+ * Maze challenge that uses server-rendered maze images.
+ * The maze structure, solution, and wall positions are server-side only.
+ * The client receives a PNG image and entrance/exit zone coordinates.
+ */
 export class MazeChallenge implements ChallengeInstance {
   showDoneButton = false;
   timeLimit = 8000;
 
-  private maze!: MazeDefinition;
-  private shortestPath!: { row: number; col: number }[];
+  private serverUrl: string;
+  private siteKey: string;
   private points: CapturePoint[] = [];
   private ctx!: ChallengeContext;
   private drawing = false;
-  private offsetX = 0;
-  private offsetY = 0;
+  private sessionId: string | null = null;
+  private entrance: ZoneRect | null = null;
+  private exit: ZoneRect | null = null;
+  private serverResult: { token: string; score: number; verdict: 'bot' | 'human' | 'uncertain' } | null = null;
 
-  // Bound handlers
   private handleDown!: (e: PointerEvent) => void;
   private handleMove!: (e: PointerEvent) => void;
   private handleUp!: (e: PointerEvent) => void;
 
-  getMethod(): ChallengeMethod {
-    return 'maze';
+  constructor(serverUrl: string, siteKey: string) {
+    this.serverUrl = serverUrl.replace(/\/$/, '');
+    this.siteKey = siteKey;
   }
 
-  getChallengeId(): string {
-    return 'maze';
-  }
+  getMethod(): ChallengeMethod { return 'maze'; }
+  getChallengeId(): string { return 'maze'; }
+  getTitle(): string { return 'Navigate the maze'; }
 
-  getTitle(): string {
-    return 'Navigate the maze';
-  }
-
-  start(ctx: ChallengeContext): void {
+  async start(ctx: ChallengeContext): Promise<void> {
     this.ctx = ctx;
     this.points = [];
     this.drawing = false;
+    this.serverResult = null;
 
-    // Generate maze
-    this.maze = generateMaze(MAZE_ROWS, MAZE_COLS, CELL_SIZE);
-    const solution = solveMaze(this.maze);
-    this.shortestPath = solution || [];
+    // Fetch maze image from server
+    try {
+      const res = await fetch(`${this.serverUrl}/captcha/maze/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ siteKey: this.siteKey }),
+      });
+      if (!res.ok) throw new Error('Failed to start maze challenge');
+      const data = await res.json();
+      this.sessionId = data.sessionId;
+      this.entrance = data.entrance;
+      this.exit = data.exit;
 
-    // Render maze
-    const wallColor = ctx.strokeColor;
-    const bgColor = '#ffffff';
-    const entranceColor = 'rgba(34, 197, 94, 0.3)';
-    const exitColor = 'rgba(239, 68, 68, 0.3)';
-    renderMaze(ctx.ctx, this.maze, wallColor, bgColor, entranceColor, exitColor);
-
-    // Get offset for coordinate mapping
-    const offset = getMazeOffset(ctx.ctx, this.maze);
-    this.offsetX = offset.offsetX;
-    this.offsetY = offset.offsetY;
+      // Draw maze image on canvas
+      const img = new Image();
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => {
+          ctx.ctx.drawImage(img, 0, 0, 480, 400);
+          resolve();
+        };
+        img.onerror = reject;
+        img.src = `data:image/png;base64,${data.image}`;
+      });
+    } catch {
+      throw new Error('Could not connect to captcha server.');
+    }
 
     // Show instruction
     ctx.instructionEl.innerHTML = '';
@@ -102,23 +108,47 @@ export class MazeChallenge implements ChallengeInstance {
     this.stop();
     this.points = [];
     this.drawing = false;
+    this.sessionId = null;
+    this.serverResult = null;
   }
 
   async analyze(): Promise<AnalysisResult> {
-    if (this.points.length < 5) {
-      throw new Error('Not enough movement \u2014 trace a path through the maze.');
-    }
+    if (!this.sessionId) throw new Error('Challenge did not start properly.');
+    if (this.points.length < 5) throw new Error('Not enough movement \u2014 trace a path through the maze.');
 
-    const behavioral = analyzeBehavior(this.points);
-    const mazeMetrics = analyzeMazePath(
-      this.points, this.maze, this.shortestPath, this.offsetX, this.offsetY,
-    );
+    const res = await fetch(`${this.serverUrl}/captcha/maze/${this.sessionId}/verify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        points: this.points.map(p => ({ x: p.x, y: p.y, t: p.t })),
+        origin: window.location.origin,
+      }),
+    });
 
-    if (!mazeMetrics.reachedExit) {
-      throw new Error('You didn\u2019t reach the exit. Try again!');
-    }
+    if (!res.ok) throw new Error('Server verification failed.');
+    const data = await res.json();
+    this.serverResult = data;
 
-    return computeMazeScore(behavioral, mazeMetrics);
+    return {
+      score: data.score,
+      behavioral: {
+        pointCount: this.points.length,
+        totalDuration: this.points.length > 1 ? this.points[this.points.length - 1].t - this.points[0].t : 0,
+        averageSpeed: 0, speedStdDev: 0, accelerationStdDev: 0,
+        timestampRegularity: 0, microJitterScore: 0, pauseCount: 0,
+      },
+      shapePerfection: {
+        shapeType: 'circle',
+        matchScore: data.score,
+        perfectionScore: 1 - data.score,
+        details: {},
+      },
+      verdict: data.verdict,
+    };
+  }
+
+  getServerToken(): string | null {
+    return this.serverResult?.token ?? null;
   }
 
   getPoints(): CapturePoint[] {
@@ -129,38 +159,23 @@ export class MazeChallenge implements ChallengeInstance {
 
   private getCoords(e: PointerEvent): { x: number; y: number } {
     const rect = this.ctx.canvas.getBoundingClientRect();
-    return {
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top,
-    };
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
   }
 
-  private isInEntranceZone(x: number, y: number): boolean {
-    const { entrance, cellSize } = this.maze;
-    const zoneX = this.offsetX - cellSize * 0.5;
-    const zoneY = this.offsetY + entrance.row * cellSize;
-    return x >= zoneX && x <= this.offsetX + cellSize * 0.5 &&
-           y >= zoneY && y <= zoneY + cellSize;
-  }
-
-  private isInExitZone(x: number, y: number): boolean {
-    const { exit, cols, cellSize } = this.maze;
-    const zoneX = this.offsetX + cols * cellSize;
-    const zoneY = this.offsetY + exit.row * cellSize;
-    return x >= zoneX - cellSize * 0.5 && x <= zoneX + cellSize * 0.5 &&
-           y >= zoneY && y <= zoneY + cellSize;
+  private isInZone(x: number, y: number, zone: ZoneRect): boolean {
+    return x >= zone.x && x <= zone.x + zone.width && y >= zone.y && y <= zone.y + zone.height;
   }
 
   private onPointerDown(e: PointerEvent): void {
+    if (!this.entrance) return;
     const { x, y } = this.getCoords(e);
-    if (!this.isInEntranceZone(x, y)) return;
+    if (!this.isInZone(x, y, this.entrance)) return;
 
     this.drawing = true;
     this.ctx.canvas.setPointerCapture(e.pointerId);
     this.points = [];
     this.points.push({ x, y, t: performance.now(), pressure: e.pressure });
 
-    // Start drawing path
     this.ctx.ctx.strokeStyle = '#3b82f6';
     this.ctx.ctx.lineWidth = 2.5;
     this.ctx.ctx.lineCap = 'round';
@@ -170,18 +185,16 @@ export class MazeChallenge implements ChallengeInstance {
   }
 
   private onPointerMove(e: PointerEvent): void {
-    if (!this.drawing) return;
+    if (!this.drawing || !this.exit) return;
     const { x, y } = this.getCoords(e);
     this.points.push({ x, y, t: performance.now(), pressure: e.pressure });
 
-    // Draw path
     this.ctx.ctx.lineTo(x, y);
     this.ctx.ctx.stroke();
     this.ctx.ctx.beginPath();
     this.ctx.ctx.moveTo(x, y);
 
-    // Check if exit reached
-    if (this.isInExitZone(x, y)) {
+    if (this.isInZone(x, y, this.exit)) {
       this.drawing = false;
       this.ctx.onComplete();
     }

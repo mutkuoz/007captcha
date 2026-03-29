@@ -65,6 +65,59 @@ export interface BallVerifyResult {
   token: string;
 }
 
+/** Maze cell with wall flags */
+export interface MazeCell {
+  row: number;
+  col: number;
+  walls: { top: boolean; right: boolean; bottom: boolean; left: boolean };
+}
+
+/** Complete maze definition (server-side only) */
+export interface MazeDefinition {
+  rows: number;
+  cols: number;
+  cells: MazeCell[][];
+  entrance: { row: number; col: number };
+  exit: { row: number; col: number };
+  cellSize: number;
+}
+
+/** Maze-specific analysis metrics */
+export interface MazeAnalysisMetrics {
+  reachedExit: boolean;
+  wallCrossings: number;
+  wallTouches: number;
+  pathStraightness: number;
+  optimalPathRatio: number;
+  backtrackCount: number;
+}
+
+/** Pixel rectangle sent to client for entrance/exit zones */
+export interface ZoneRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** Result from maze challenge verification */
+export interface MazeVerifyResult {
+  success: boolean;
+  score: number;
+  verdict: 'bot' | 'human' | 'uncertain';
+  token: string;
+  error?: string;
+}
+
+/** Result from shape challenge verification */
+export interface ShapeVerifyResult {
+  success: boolean;
+  score: number;
+  verdict: 'bot' | 'human' | 'uncertain';
+  token: string;
+  error?: string;
+}
+
 export interface VerifyResult {
   success: boolean;
   score: number;

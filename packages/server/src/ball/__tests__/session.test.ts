@@ -31,10 +31,10 @@ describe('BallChallengeManager', () => {
     expect(session!.status).toBe('pending');
   });
 
-  it('should stream frames and complete', async () => {
+  it('should stream rendered PNG frames and complete', async () => {
     manager = new BallChallengeManager(SECRET, { durationMs: TEST_DURATION });
     const { sessionId } = manager.createSession();
-    const frames: Array<{ x: number; y: number; t: number }> = [];
+    const frames: Array<{ img: string; t: number }> = [];
 
     await new Promise<void>((resolve) => {
       manager.startStreaming(
@@ -44,7 +44,20 @@ describe('BallChallengeManager', () => {
       );
     });
 
-    expect(frames.length).toBeGreaterThan(20);
+    // ~20fps (every 3rd tick of 60fps) over 500ms = ~10 frames
+    expect(frames.length).toBeGreaterThan(5);
+
+    // Verify frames contain base64 PNG data, not raw coordinates
+    for (const frame of frames) {
+      expect(frame.img).toBeTruthy();
+      expect(typeof frame.img).toBe('string');
+      // PNG header in base64 starts with 'iVBOR'
+      expect(frame.img.startsWith('iVBOR')).toBe(true);
+      expect(frame.t).toBeGreaterThanOrEqual(0);
+      // Must NOT have x/y coordinates
+      expect((frame as any).x).toBeUndefined();
+      expect((frame as any).y).toBeUndefined();
+    }
 
     const session = manager.getSession(sessionId);
     expect(session!.status).toBe('awaiting_result');
@@ -89,25 +102,21 @@ describe('BallChallengeManager', () => {
     expect(started).toBe(false);
   });
 
-  it('should emit color changes with valid visuals during streaming', async () => {
+  it('should handle color changes internally without exposing to caller', async () => {
     manager = new BallChallengeManager(SECRET, { durationMs: 2000 });
-    const { sessionId } = manager.createSession();
-    const colorChanges: Array<{ bgColor: string; ballColor: string; ballShape: string }> = [];
+    const { sessionId, visuals: initialVisuals } = manager.createSession();
 
     await new Promise<void>((resolve) => {
       manager.startStreaming(
         sessionId,
         () => {},
         () => resolve(),
-        (visuals) => colorChanges.push(visuals),
       );
     });
 
-    // Color changes are probabilistic; verify any that fired have valid properties
-    for (const change of colorChanges) {
-      expect(change.bgColor).toBeTruthy();
-      expect(change.ballColor).toBeTruthy();
-      expect(change.bgColor).not.toBe(change.ballColor);
-    }
+    // startStreaming only takes 2 callbacks now (no onColorChange)
+    // Color changes happen internally — verify the API works without it
+    const session = manager.getSession(sessionId);
+    expect(session!.status).toBe('awaiting_result');
   }, 10000);
 });

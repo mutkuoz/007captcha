@@ -123,19 +123,25 @@ export function analyzeTriangle(points: CapturePoint[]): ShapePerfectionMetrics 
   const straightness = [
     edgeStraightness(points, corners[0], corners[1]),
     edgeStraightness(points, corners[1], corners[2]),
-    edgeStraightness(points, corners[2], corners.length > 2 ? corners[0] + points.length : corners[0]),
+    edgeStraightness(points, corners[2], points.length - 1),
   ];
-  // For the wrap-around edge, we measure from corner[2] to end + start to corner[0]
-  // Simplified: just measure the direct segment
-  straightness[2] = edgeStraightness(points, corners[2], points.length - 1);
 
   const avgStraightness = straightness.reduce((s, v) => s + v, 0) / 3;
 
   // Closure gap
   const closureGap = dist(points[0], points[points.length - 1]) / (meanSide || 1);
 
-  // Closure: first and last points should be near each other relative to side length
-  const closureComponent = closureGap < 0.3 ? 1 : closureGap < 0.6 ? 0.5 : closureGap < 1.0 ? 0.2 : 0;
+  // Hard fail: open shapes must not pass
+  if (closureGap > 0.25) {
+    return {
+      shapeType: 'triangle',
+      matchScore: 0,
+      perfectionScore: 0,
+      details: { angleDev, sideDev, edgeStraightness: avgStraightness, closureGap },
+    };
+  }
+
+  const closureComponent = closureGap < 0.2 ? 1 : closureGap < 0.35 ? 0.6 : 0.2;
 
   // Match score: does it look like a triangle?
   const angleSum = angles.reduce((s, a) => s + a, 0);

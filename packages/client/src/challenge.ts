@@ -27,4 +27,6 @@ export interface ChallengeInstance {
   reset(): void;
   analyze(): Promise<AnalysisResult>;
   getPoints(): CapturePoint[];
+  /** For server-verified challenges, returns the signed token after analyze(). */
+  getServerToken?(): string | null;
 }

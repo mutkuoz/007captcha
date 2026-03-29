@@ -1,8 +1,8 @@
 import type { BallFrame, BallShape, BallVisuals } from '../types';
 
-const BALL_RADIUS = 14;
-const CANVAS_W = 308;
-const CANVAS_H = 260;
+const BALL_RADIUS = 20;
+const CANVAS_W = 480;
+const CANVAS_H = 400;
 
 export function clearCanvas(ctx: CanvasRenderingContext2D, bgColor: string): void {
   ctx.fillStyle = bgColor;

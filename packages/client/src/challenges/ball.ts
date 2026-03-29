@@ -1,6 +1,6 @@
 import type { ChallengeContext, ChallengeInstance } from '../challenge';
 import type { ChallengeMethod, CapturePoint, AnalysisResult, BallVisuals } from '../types';
-import { renderFrame, drawCountdown, clearCanvas } from '../ball/render';
+import { drawCountdown } from '../ball/render';
 
 const COUNTDOWN_MS = 3000;
 const TRACKING_MS = 8000;
@@ -63,13 +63,13 @@ export class BallChallenge implements ChallengeInstance {
     // Show "click to start" on a neutral background
     const c = ctx.ctx;
     c.fillStyle = '#1a1a2e';
-    c.fillRect(0, 0, 308, 260);
+    c.fillRect(0, 0, 480, 400);
     c.save();
     c.fillStyle = '#e94560';
     c.font = 'bold 18px sans-serif';
     c.textAlign = 'center';
     c.textBaseline = 'middle';
-    c.fillText('Click to start', 308 / 2, 260 / 2);
+    c.fillText('Click to start', 480 / 2, 400 / 2);
     c.restore();
 
     this.boundClick = this.onCanvasClick.bind(this);
@@ -213,15 +213,16 @@ export class BallChallenge implements ChallengeInstance {
     );
 
     this.eventSource.addEventListener('frame', (e: MessageEvent) => {
-      if (!this.tracking || !this.challengeCtx || !this.visuals) return;
-      const frame = JSON.parse(e.data);
-      renderFrame(this.challengeCtx.ctx, frame, this.visuals);
-    });
-
-    this.eventSource.addEventListener('colorChange', (e: MessageEvent) => {
-      if (!this.tracking || !this.visuals) return;
-      const newVisuals = JSON.parse(e.data);
-      this.visuals = { ...this.visuals, bgColor: newVisuals.bgColor, ballColor: newVisuals.ballColor };
+      if (!this.tracking || !this.challengeCtx) return;
+      const data = JSON.parse(e.data);
+      // Server sends pre-rendered PNG frames — draw directly to canvas
+      const img = new Image();
+      img.onload = () => {
+        if (this.challengeCtx) {
+          this.challengeCtx.ctx.drawImage(img, 0, 0, 480, 400);
+        }
+      };
+      img.src = `data:image/png;base64,${data.img}`;
     });
 
     this.eventSource.addEventListener('end', () => {

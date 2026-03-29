@@ -45,7 +45,7 @@ export const STYLES = `
   border: 1px solid var(--captcha-canvas-border);
   border-radius: var(--captcha-radius);
   padding: 16px;
-  width: 340px;
+  width: 512px;
   box-shadow: var(--captcha-shadow);
 }
 
@@ -131,8 +131,8 @@ export const STYLES = `
 
 canvas {
   display: block;
-  width: 308px;
-  height: 260px;
+  width: 480px;
+  height: 400px;
 }
 
 /* ── Overlay (start screen) ── */
