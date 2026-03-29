@@ -1,6 +1,7 @@
 import type { ChallengeContext, ChallengeInstance } from '../challenge';
 import type { ChallengeMethod, CapturePoint, AnalysisResult, BallVisuals } from '../types';
 import { drawCountdown } from '../ball/render';
+import { collectEnvironment } from '../env';
 
 const COUNTDOWN_MS = 3000;
 const TRACKING_MS = 8000;
@@ -113,6 +114,7 @@ export class BallChallenge implements ChallengeInstance {
         points: this.points.map(p => ({ x: p.x, y: p.y, t: p.t })),
         cursorStartT: this.trackingStartT,
         origin: window.location.origin,
+        clientEnv: collectEnvironment(),
       }),
     });
 

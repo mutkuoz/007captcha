@@ -15,7 +15,9 @@
 
 ---
 
-Handles everything security-sensitive: challenge generation, behavioral analysis, scoring, and HMAC-SHA256 token signing. The client widget acts as a thin rendering layer &mdash; all verification logic runs here.
+Handles everything security-sensitive: challenge generation, multi-layered behavioral analysis, scoring, environment fingerprinting, and HMAC-SHA256 token signing. The client widget acts as a thin rendering layer &mdash; all verification logic runs here.
+
+Scoring evaluates 12+ independent signals per challenge including spectral timing analysis, velocity-curvature power law fitting, jerk profiling, sub-movement segmentation, drift detection, Fitts's Law validation, reaction time modeling, and environment fingerprinting. Hard bot flags (timer-locked intervals, non-monotonic timestamps, `navigator.webdriver`, impossible power law fits) trigger immediate bot verdicts.
 
 **Zero runtime dependencies.** Uses only Node.js built-in `crypto`.
 
@@ -72,7 +74,7 @@ const ball = new BallChallengeManager(SECRET);
 |--------|------|---------|
 | `POST` | `/captcha/ball/start` | `ball.createSession()` |
 | `GET` | `/captcha/ball/:id/stream` | `ball.startStreaming(id, onFrame, onEnd)` |
-| `POST` | `/captcha/ball/:id/verify` | `ball.verify(id, points, cursorStartT, origin)` |
+| `POST` | `/captcha/ball/:id/verify` | `ball.verify(id, points, cursorStartT, origin, clientEnv?, requestMeta?)` |
 
 ### Maze &mdash; `MazeChallengeManager`
 
@@ -88,7 +90,7 @@ const maze = new MazeChallengeManager(SECRET);
 | Method | Path | Handler |
 |--------|------|---------|
 | `POST` | `/captcha/maze/start` | `maze.createSession()` |
-| `POST` | `/captcha/maze/:id/verify` | `maze.verify(id, points, origin)` |
+| `POST` | `/captcha/maze/:id/verify` | `maze.verify(id, points, origin, clientEnv?, requestMeta?)` |
 
 ### Shape &mdash; `ShapeChallengeManager`
 
@@ -104,7 +106,7 @@ const shape = new ShapeChallengeManager(SECRET);
 | Method | Path | Handler |
 |--------|------|---------|
 | `POST` | `/captcha/shape/start` | `shape.createSession()` |
-| `POST` | `/captcha/shape/:id/verify` | `shape.verify(id, points, origin)` |
+| `POST` | `/captcha/shape/:id/verify` | `shape.verify(id, points, origin, clientEnv?, requestMeta?)` |
 
 ## Express Integration
 
@@ -150,20 +152,34 @@ app.get('/captcha/ball/:id/stream', (req, res) => {
 });
 
 app.post('/captcha/ball/:id/verify', (req, res) => {
-  const { points, cursorStartT, origin } = req.body;
-  res.json(ball.verify(req.params.id, points || [], cursorStartT || 0, origin || ''));
+  const { points, cursorStartT, origin, clientEnv } = req.body;
+  const requestMeta = {
+    userAgent: req.headers['user-agent'],
+    acceptLanguage: req.headers['accept-language'],
+  };
+  res.json(ball.verify(req.params.id, points || [], cursorStartT || 0, origin || '', clientEnv, requestMeta));
 });
 
 // Maze
 app.post('/captcha/maze/start', (req, res) => res.json(maze.createSession()));
 app.post('/captcha/maze/:id/verify', (req, res) => {
-  res.json(maze.verify(req.params.id, req.body.points || [], req.body.origin || ''));
+  const { points, origin, clientEnv } = req.body;
+  const requestMeta = {
+    userAgent: req.headers['user-agent'],
+    acceptLanguage: req.headers['accept-language'],
+  };
+  res.json(maze.verify(req.params.id, points || [], origin || '', clientEnv, requestMeta));
 });
 
 // Shape
 app.post('/captcha/shape/start', (req, res) => res.json(shape.createSession()));
 app.post('/captcha/shape/:id/verify', (req, res) => {
-  res.json(shape.verify(req.params.id, req.body.points || [], req.body.origin || ''));
+  const { points, origin, clientEnv } = req.body;
+  const requestMeta = {
+    userAgent: req.headers['user-agent'],
+    acceptLanguage: req.headers['accept-language'],
+  };
+  res.json(shape.verify(req.params.id, points || [], origin || '', clientEnv, requestMeta));
 });
 
 // Token verification
@@ -175,6 +191,42 @@ app.listen(3007);
 ```
 
 See [`examples/express-server/`](../../examples/express-server/) for the full demo with a UI.
+
+## Environment Detection
+
+For enhanced bot detection, pass client environment signals and HTTP request metadata to verify endpoints. These are optional &mdash; scoring still works without them, but detection precision improves when they're included.
+
+### `ClientEnvironment`
+
+Collected client-side and sent with the verify request body:
+
+```ts
+interface ClientEnvironment {
+  webdriver: boolean;       // navigator.webdriver
+  languageCount: number;    // navigator.languages.length
+  screenWidth: number;      // screen.width
+  screenHeight: number;     // screen.height
+  outerWidth: number;       // window.outerWidth
+  outerHeight: number;      // window.outerHeight
+  pluginCount: number;      // navigator.plugins.length
+  touchSupport: boolean;    // touch event support
+  devicePixelRatio: number; // window.devicePixelRatio
+  colorDepth: number;       // screen.colorDepth
+}
+```
+
+### `RequestMeta`
+
+Extracted server-side from HTTP headers:
+
+```ts
+interface RequestMeta {
+  userAgent?: string;       // req.headers['user-agent']
+  acceptLanguage?: string;  // req.headers['accept-language']
+}
+```
+
+Hard bot flags: `navigator.webdriver === true` or `outerWidth === 0 && outerHeight === 0` (headless browser signature) trigger an immediate bot verdict.
 
 ## Session Lifecycle
 

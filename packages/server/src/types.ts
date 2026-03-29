@@ -118,6 +118,26 @@ export interface ShapeVerifyResult {
   error?: string;
 }
 
+/** Browser environment signals collected client-side (can be spoofed — weighted, not definitive) */
+export interface ClientEnvironment {
+  webdriver: boolean;
+  languageCount: number;
+  screenWidth: number;
+  screenHeight: number;
+  outerWidth: number;
+  outerHeight: number;
+  pluginCount: number;
+  touchSupport: boolean;
+  devicePixelRatio: number;
+  colorDepth: number;
+}
+
+/** HTTP request metadata extracted server-side */
+export interface RequestMeta {
+  userAgent?: string;
+  acceptLanguage?: string;
+}
+
 export interface VerifyResult {
   success: boolean;
   score: number;

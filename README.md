@@ -17,7 +17,7 @@
 
 ---
 
-Users complete quick interactive challenges &mdash; following a moving ball, drawing shapes, or navigating mazes. Behind the scenes, the system analyzes how they move: cursor dynamics, reaction patterns, movement consistency, and challenge-specific signals that are extremely difficult for automated agents to replicate convincingly.
+Users complete quick interactive challenges &mdash; following a moving ball, drawing shapes, or navigating mazes. Behind the scenes, the system runs a deep multi-layered analysis: spectral timing analysis, velocity-curvature power law fitting, jerk profiling, sub-movement segmentation, Fitts's Law validation, reaction time modeling, drift detection, and environment fingerprinting &mdash; signals that are extremely difficult for automated agents to replicate convincingly.
 
 All verification runs **server-side**. The client never holds scoring logic, detection parameters, or signing secrets. Tokens are HMAC-SHA256 signed, single-use, and expire automatically.
 
@@ -27,6 +27,9 @@ All verification runs **server-side**. The client never holds scoring logic, det
 
 - **Three challenge methods** &mdash; Ball following (real-time tracking), shape drawing, and maze navigation. Use one or randomize across all three.
 - **Fully server-side verification** &mdash; All scoring, detection, and token signing run on your server. The browser is a thin input-capture layer with no access to scoring logic or detection parameters.
+- **Multi-layered behavioral analysis** &mdash; 12+ scoring signals including spectral timing analysis (DFT on inter-event intervals), velocity-curvature power law (1/3 power law), jerk profiling, sub-movement segmentation, drift/bias detection, and environment fingerprinting.
+- **Challenge-specific signals** &mdash; Fitts's Law validation for mazes, reaction time distribution modeling for ball tracking, speed profile analysis at trajectory direction changes.
+- **Hard bot flags** &mdash; Certain signals (timer-locked spectral peaks, non-monotonic timestamps, `navigator.webdriver`, impossible power law fits) trigger an immediate bot verdict, bypassing scoring entirely.
 - **Real-time ball streaming** &mdash; Ball trajectories are computed tick-by-tick and streamed as rendered images via SSE. Future positions don't exist until generated. No video, no DOM elements, no extractable assets.
 - **Opaque challenges** &mdash; Mazes are delivered as PNG images. Shape types are assigned server-side. The client never sees wall data, solutions, or generation logic.
 - **HMAC-SHA256 tokens** &mdash; Single-use, signed server-side, auto-expire after 5 minutes. Verified with one function call.
@@ -103,22 +106,34 @@ app.get('/captcha/ball/:id/stream', (req, res) => {
 });
 
 app.post('/captcha/ball/:id/verify', (req, res) => {
-  const { points, cursorStartT, origin } = req.body;
-  res.json(ball.verify(req.params.id, points || [], cursorStartT || 0, origin || ''));
+  const { points, cursorStartT, origin, clientEnv } = req.body;
+  const requestMeta = {
+    userAgent: req.headers['user-agent'],
+    acceptLanguage: req.headers['accept-language'],
+  };
+  res.json(ball.verify(req.params.id, points || [], cursorStartT || 0, origin || '', clientEnv, requestMeta));
 });
 
 // — Maze (2 endpoints) —
 app.post('/captcha/maze/start', (req, res) => res.json(maze.createSession()));
 app.post('/captcha/maze/:id/verify', (req, res) => {
-  const { points, origin } = req.body;
-  res.json(maze.verify(req.params.id, points || [], origin || ''));
+  const { points, origin, clientEnv } = req.body;
+  const requestMeta = {
+    userAgent: req.headers['user-agent'],
+    acceptLanguage: req.headers['accept-language'],
+  };
+  res.json(maze.verify(req.params.id, points || [], origin || '', clientEnv, requestMeta));
 });
 
 // — Shape (2 endpoints) —
 app.post('/captcha/shape/start', (req, res) => res.json(shape.createSession()));
 app.post('/captcha/shape/:id/verify', (req, res) => {
-  const { points, origin } = req.body;
-  res.json(shape.verify(req.params.id, points || [], origin || ''));
+  const { points, origin, clientEnv } = req.body;
+  const requestMeta = {
+    userAgent: req.headers['user-agent'],
+    acceptLanguage: req.headers['accept-language'],
+  };
+  res.json(shape.verify(req.params.id, points || [], origin || '', clientEnv, requestMeta));
 });
 
 // — Token verification (all methods) —
@@ -241,6 +256,10 @@ widget.destroy()    // Remove widget from DOM
 
 - **Server-side analysis** &mdash; All scoring, detection, and token signing happen on the server. The client is a thin rendering layer that captures cursor input and sends it back.
 - **No client secrets** &mdash; The browser never holds detection logic, scoring thresholds, or signing keys.
+- **Multi-signal behavioral analysis** &mdash; Each challenge evaluates 12+ independent signals: spectral timing analysis (DFT on event intervals to detect timer-locked bots), velocity-curvature power law (1/3 power law fit), jerk profiling (3rd derivative of position), sub-movement segmentation (velocity peak counting), drift/bias detection (movement skewness), and more.
+- **Challenge-specific signals** &mdash; Fitts's Law validation (maze corridor width vs speed), reaction time distribution modeling (ball trajectory changes), speed profile at direction changes (deceleration/acceleration asymmetry).
+- **Hard bot flags** &mdash; Spectral peak ratios above 8.0, non-monotonic/duplicate timestamps, `navigator.webdriver === true`, headless browser signatures, and impossible power law fits trigger immediate bot verdicts that bypass scoring.
+- **Environment fingerprinting** &mdash; Client-collected browser signals (webdriver, plugins, screen dimensions, touch support) combined with server-side HTTP header analysis (User-Agent, Accept-Language).
 - **Real-time streaming** &mdash; Ball positions are computed tick-by-tick on the server and streamed as rendered images. Future positions don't exist until each frame is generated.
 - **Opaque challenges** &mdash; Mazes are sent as PNG images. The client has no access to wall positions, solutions, or cell data. Shape assignments come from the server with no local shape generation.
 - **HMAC-SHA256 tokens** &mdash; Single-use, signed server-side, 5-minute expiry.

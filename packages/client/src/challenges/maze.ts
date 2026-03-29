@@ -1,5 +1,6 @@
 import type { ChallengeContext, ChallengeInstance } from '../challenge';
 import type { ChallengeMethod, CapturePoint, AnalysisResult } from '../types';
+import { collectEnvironment } from '../env';
 
 interface ZoneRect { x: number; y: number; width: number; height: number }
 
@@ -122,6 +123,7 @@ export class MazeChallenge implements ChallengeInstance {
       body: JSON.stringify({
         points: this.points.map(p => ({ x: p.x, y: p.y, t: p.t })),
         origin: window.location.origin,
+        clientEnv: collectEnvironment(),
       }),
     });
 
