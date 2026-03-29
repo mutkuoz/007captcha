@@ -1,7 +1,11 @@
 import { createHmac, randomBytes } from 'crypto';
-import type { CursorPoint, ShapeType, ShapeVerifyResult } from '../types';
+import type { CursorPoint, ShapeType, ShapeVerifyResult, ClientEnvironment, RequestMeta } from '../types';
 import { analyzeShape } from './analyze';
-import { analyzeBehavior, scoreBehavioral, analyzePowerLaw, isPowerLawBotFlag } from '../ball/scoring';
+import {
+  analyzeBehavior, scoreBehavioral, analyzePowerLaw, isPowerLawBotFlag,
+  analyzeTimingSpectrum, isSpectralBotFlag, analyzeJerk, analyzeSubMovements,
+  analyzeDrift, isTimestampBotFlag, isEnvironmentBotFlag, scoreEnvironment,
+} from '../ball/scoring';
 
 const SHAPES: ShapeType[] = ['circle', 'triangle', 'square'];
 const SESSION_TTL_MS = 60_000;
@@ -47,7 +51,7 @@ export class ShapeChallengeManager {
     return { sessionId: id, shape };
   }
 
-  verify(sessionId: string, cursorPoints: CursorPoint[], origin: string): ShapeVerifyResult {
+  verify(sessionId: string, cursorPoints: CursorPoint[], origin: string, clientEnv?: ClientEnvironment, requestMeta?: RequestMeta): ShapeVerifyResult {
     const session = this.sessions.get(sessionId);
     if (!session || session.verified) {
       const reason = !session ? 'session_not_found' : 'already_verified';
@@ -75,16 +79,36 @@ export class ShapeChallengeManager {
       return { success: false, score: 0, verdict: 'bot', token: '', error: `shape_mismatch (${shapeResult.matchScore.toFixed(3)})` };
     }
 
-    // Power law hard-flag: immediate bot verdict if movement violates the law
+    // Hard flags — immediate bot verdict
+    if (isTimestampBotFlag(cursorPoints)) {
+      this.sessions.delete(sessionId);
+      return { success: false, score: 0, verdict: 'bot', token: '', error: 'timestamp_violation' };
+    }
+    if (isEnvironmentBotFlag(clientEnv, requestMeta)) {
+      this.sessions.delete(sessionId);
+      return { success: false, score: 0, verdict: 'bot', token: '', error: 'environment_violation' };
+    }
     const powerLaw = analyzePowerLaw(cursorPoints);
     if (isPowerLawBotFlag(powerLaw)) {
       this.sessions.delete(sessionId);
       return { success: false, score: 0, verdict: 'bot', token: '', error: 'power_law_violation' };
     }
+    const spectral = analyzeTimingSpectrum(cursorPoints);
+    if (isSpectralBotFlag(spectral)) {
+      this.sessions.delete(sessionId);
+      return { success: false, score: 0, verdict: 'bot', token: '', error: 'spectral_violation' };
+    }
 
-    // Behavioral scoring (with power law integrated)
+    // Compute all behavioral signals (no speed-at-direction-changes for shape — lower value per user)
+    const jerk = analyzeJerk(cursorPoints);
+    const subMovement = analyzeSubMovements(cursorPoints);
+    const drift = analyzeDrift(cursorPoints);
+    const envScore = scoreEnvironment(clientEnv, requestMeta);
+
     const behavioral = analyzeBehavior(cursorPoints);
-    const behavScore = scoreBehavioral(behavioral, powerLaw);
+    const behavScore = scoreBehavioral(behavioral, {
+      powerLaw, spectral, jerk, subMovement, drift, envScore,
+    });
 
     // Shape perfection: high perfection = bot-like, so invert
     const shapeScore = 1.0 - shapeResult.perfectionScore;

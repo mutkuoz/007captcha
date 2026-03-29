@@ -86,6 +86,8 @@ const token = widget.getToken();
 
 All methods require a `serverUrl`. The server handles session creation, analysis, and token signing &mdash; the client is a rendering and input-capture layer.
 
+The client automatically collects browser environment signals (`navigator.webdriver`, plugin count, screen dimensions, touch support, etc.) and sends them with each verify request. These are used server-side for environment-based bot detection. No configuration is needed &mdash; collection happens transparently.
+
 ## Configuration
 
 ### `render(config): CaptchaWidget`

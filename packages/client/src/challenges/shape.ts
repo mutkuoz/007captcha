@@ -1,5 +1,6 @@
 import type { ChallengeContext, ChallengeInstance } from '../challenge';
 import type { ChallengeMethod, CapturePoint, ShapeType, AnalysisResult } from '../types';
+import { collectEnvironment } from '../env';
 
 const SHAPE_ICONS: Record<ShapeType, string> = {
   circle: '\u25EF',
@@ -122,6 +123,7 @@ export class ShapeChallenge implements ChallengeInstance {
       body: JSON.stringify({
         points: this.points.map(p => ({ x: p.x, y: p.y, t: p.t })),
         origin: window.location.origin,
+        clientEnv: collectEnvironment(),
       }),
     });
 

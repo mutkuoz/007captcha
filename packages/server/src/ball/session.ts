@@ -1,7 +1,7 @@
 import { createHmac, randomBytes } from 'crypto';
-import type { BallVisuals, BallShape, CursorPoint, BallVerifyResult } from '../types';
+import type { BallVisuals, BallShape, CursorPoint, BallVerifyResult, ClientEnvironment, RequestMeta } from '../types';
 import { BallPhysics } from './physics';
-import { analyzeBallTracking } from './analyze';
+import { analyzeBallTracking, analyzeSpeedAtDirectionChanges, analyzeReactionTimes } from './analyze';
 import { computeBallScore } from './scoring';
 import { renderBallFrame } from './renderer';
 
@@ -144,6 +144,8 @@ export class BallChallengeManager {
     cursorPoints: CursorPoint[],
     cursorStartT: number,
     origin: string,
+    clientEnv?: ClientEnvironment,
+    requestMeta?: RequestMeta,
   ): BallVerifyResult {
     const session = this.sessions.get(sessionId);
     if (!session) {
@@ -166,7 +168,11 @@ export class BallChallengeManager {
 
     // Analyze tracking quality
     const ballMetrics = analyzeBallTracking(cursorPoints, frames, changeEvents, cursorStartT);
-    const { score, verdict } = computeBallScore(cursorPoints, ballMetrics);
+    const speedProfile = analyzeSpeedAtDirectionChanges(cursorPoints, changeEvents, cursorStartT);
+    const reactionTime = analyzeReactionTimes(cursorPoints, changeEvents, cursorStartT);
+    const { score, verdict } = computeBallScore(
+      cursorPoints, ballMetrics, speedProfile, reactionTime, clientEnv, requestMeta,
+    );
 
     // Create signed token
     const payload = {

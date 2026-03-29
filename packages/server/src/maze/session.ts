@@ -1,10 +1,14 @@
 import { createHmac, randomBytes } from 'crypto';
-import type { MazeDefinition, CursorPoint, ZoneRect, MazeVerifyResult } from '../types';
+import type { MazeDefinition, CursorPoint, ZoneRect, MazeVerifyResult, ClientEnvironment, RequestMeta } from '../types';
 import { generateMaze } from './generate';
 import { solveMaze } from './solve';
 import { renderMazeImage } from './renderer';
-import { analyzeMazePath } from './analyze';
-import { analyzeBehavior, scoreBehavioral, analyzePowerLaw, isPowerLawBotFlag } from '../ball/scoring';
+import { analyzeMazePath, analyzeFittsLaw, type FittsMetrics } from './analyze';
+import {
+  analyzeBehavior, scoreBehavioral, analyzePowerLaw, isPowerLawBotFlag,
+  analyzeTimingSpectrum, isSpectralBotFlag, analyzeJerk, analyzeSubMovements,
+  analyzeDrift, isTimestampBotFlag, isEnvironmentBotFlag, scoreEnvironment,
+} from '../ball/scoring';
 
 const MAZE_ROWS = 6;
 const MAZE_COLS = 8;
@@ -84,7 +88,7 @@ export class MazeChallengeManager {
     };
   }
 
-  verify(sessionId: string, cursorPoints: CursorPoint[], origin: string): MazeVerifyResult {
+  verify(sessionId: string, cursorPoints: CursorPoint[], origin: string, clientEnv?: ClientEnvironment, requestMeta?: RequestMeta): MazeVerifyResult {
     const session = this.sessions.get(sessionId);
     if (!session || session.verified) {
       const reason = !session ? 'session_not_found' : 'already_verified';
@@ -116,11 +120,8 @@ export class MazeChallengeManager {
       return { success: false, score: 0, verdict: 'bot', token: '', error: 'did_not_reach_exit' };
     }
 
-    // Maze-specific scoring
-    const mazeScore = this.scoreMaze(mazeMetrics);
-
-    // Hard fail from maze = absolute zero (no behavioral compensation)
-    if (mazeScore === 0) {
+    // Hard fail from maze geometry = absolute zero (no behavioral compensation)
+    if (mazeMetrics.wallCrossings > 3 || mazeMetrics.wallTouches >= 5) {
       const reason = mazeMetrics.wallCrossings > 3
         ? `wall_crossings (${mazeMetrics.wallCrossings})`
         : `wall_touches (${mazeMetrics.wallTouches})`;
@@ -128,18 +129,44 @@ export class MazeChallengeManager {
       return { success: false, score: 0, verdict: 'bot', token: '', error: reason };
     }
 
-    // Power law hard-flag: immediate bot verdict if movement violates the law
+    // Hard flags — immediate bot verdict
+    if (isTimestampBotFlag(cursorPoints)) {
+      this.sessions.delete(sessionId);
+      return { success: false, score: 0, verdict: 'bot', token: '', error: 'timestamp_violation' };
+    }
+    if (isEnvironmentBotFlag(clientEnv, requestMeta)) {
+      this.sessions.delete(sessionId);
+      return { success: false, score: 0, verdict: 'bot', token: '', error: 'environment_violation' };
+    }
     const powerLaw = analyzePowerLaw(cursorPoints);
     if (isPowerLawBotFlag(powerLaw)) {
       this.sessions.delete(sessionId);
       return { success: false, score: 0, verdict: 'bot', token: '', error: 'power_law_violation' };
     }
+    const spectral = analyzeTimingSpectrum(cursorPoints);
+    if (isSpectralBotFlag(spectral)) {
+      this.sessions.delete(sessionId);
+      return { success: false, score: 0, verdict: 'bot', token: '', error: 'spectral_violation' };
+    }
 
-    // Behavioral scoring (with power law integrated)
+    // Fitts's Law analysis (maze-specific)
+    const fittsMetrics = analyzeFittsLaw(cursorPoints, session.maze, session.offsetX, session.offsetY);
+
+    // Maze-specific scoring (with Fitts's Law)
+    const mazeScore = this.scoreMaze(mazeMetrics, fittsMetrics);
+
+    // Compute all behavioral signals
+    const jerk = analyzeJerk(cursorPoints);
+    const subMovement = analyzeSubMovements(cursorPoints);
+    const drift = analyzeDrift(cursorPoints);
+    const envScore = scoreEnvironment(clientEnv, requestMeta);
+
     const behavioral = analyzeBehavior(cursorPoints);
-    const behavScore = scoreBehavioral(behavioral, powerLaw);
+    const behavScore = scoreBehavioral(behavioral, {
+      powerLaw, spectral, jerk, subMovement, drift, envScore,
+    });
 
-    const score = Math.max(0, Math.min(1, 0.50 * behavScore + 0.50 * mazeScore));
+    const score = Math.max(0, Math.min(1, 0.45 * behavScore + 0.45 * mazeScore + 0.10 * envScore));
 
     let verdict: 'bot' | 'human' | 'uncertain';
     if (score < 0.25) verdict = 'bot';
@@ -167,10 +194,7 @@ export class MazeChallengeManager {
     return { success, score, verdict, token };
   }
 
-  private scoreMaze(m: import('../types').MazeAnalysisMetrics): number {
-    if (m.wallCrossings > 3) return 0;
-    if (m.wallTouches >= 5) return 0;
-
+  private scoreMaze(m: import('../types').MazeAnalysisMetrics, fitts?: FittsMetrics): number {
     const wallScore = m.wallCrossings === 0 ? 1.0
       : m.wallCrossings === 1 ? 0.7
       : m.wallCrossings === 2 ? 0.4
@@ -188,12 +212,22 @@ export class MazeChallengeManager {
 
     const backtrackScore = normalize(m.backtrackCount, 0, 5);
 
+    // Fitts's Law: humans show moderate correlation (R² 0.15-0.7)
+    let fittsScore = 0.5; // neutral if no data
+    if (fitts && fitts.fittsSampleCount >= 5) {
+      if (fitts.fittsR2 < 0.05) fittsScore = 0.2;       // no correlation (bot)
+      else if (fitts.fittsR2 < 0.15) fittsScore = 0.5;
+      else if (fitts.fittsR2 <= 0.75) fittsScore = 1.0;  // human range
+      else fittsScore = 0.7;                                // very high but possible
+    }
+
     return (
-      wallScore * 0.25 +
-      touchScore * 0.15 +
-      straightScore * 0.20 +
-      optimalScore * 0.20 +
-      backtrackScore * 0.20
+      wallScore * 0.20 +
+      touchScore * 0.12 +
+      straightScore * 0.17 +
+      optimalScore * 0.17 +
+      backtrackScore * 0.17 +
+      fittsScore * 0.17
     );
   }
 

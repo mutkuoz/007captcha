@@ -1,4 +1,5 @@
 import type { CursorPoint, BallFrame, TrajectoryChangeEvent, BallAnalysisMetrics } from '../types';
+import type { SpeedProfileMetrics, ReactionTimeMetrics } from './scoring';
 
 function mean(values: number[]): number {
   if (values.length === 0) return 0;
@@ -215,4 +216,128 @@ export function analyzeBallTracking(
     overshootCount,
     trackingCoverage,
   };
+}
+
+/**
+ * Analyze speed profiles around trajectory direction changes.
+ * Humans decelerate before turns (longer) and accelerate after (shorter).
+ */
+export function analyzeSpeedAtDirectionChanges(
+  cursorPoints: CursorPoint[],
+  changeEvents: TrajectoryChangeEvent[],
+  cursorStartT: number,
+): SpeedProfileMetrics {
+  const fail: SpeedProfileMetrics = { decelAccelRatio: 1, changeCount: 0, avgAsymmetry: 0 };
+  if (cursorPoints.length < 20 || changeEvents.length < 2) return fail;
+
+  const WINDOW_MS = 300;
+  const ratios: number[] = [];
+  const asymmetries: number[] = [];
+
+  for (const event of changeEvents) {
+    const eventAbsT = cursorStartT + event.t;
+
+    // Get speeds before and after the direction change
+    const beforeSpeeds: number[] = [];
+    const afterSpeeds: number[] = [];
+
+    for (let i = 1; i < cursorPoints.length; i++) {
+      const dt = cursorPoints[i].t - cursorPoints[i - 1].t;
+      if (dt <= 0) continue;
+      const dx = cursorPoints[i].x - cursorPoints[i - 1].x;
+      const dy = cursorPoints[i].y - cursorPoints[i - 1].y;
+      const speed = Math.sqrt(dx * dx + dy * dy) / dt * 1000;
+      const midT = (cursorPoints[i].t + cursorPoints[i - 1].t) / 2;
+
+      if (midT >= eventAbsT - WINDOW_MS && midT < eventAbsT) {
+        beforeSpeeds.push(speed);
+      } else if (midT >= eventAbsT && midT <= eventAbsT + WINDOW_MS) {
+        afterSpeeds.push(speed);
+      }
+    }
+
+    if (beforeSpeeds.length < 3 || afterSpeeds.length < 3) continue;
+
+    // Find speed minimum (the turn point) in each window
+    const beforeMin = Math.min(...beforeSpeeds);
+    const afterMin = Math.min(...afterSpeeds);
+    const beforeMax = Math.max(...beforeSpeeds);
+    const afterMax = Math.max(...afterSpeeds);
+
+    // Deceleration magnitude vs acceleration magnitude
+    const decel = beforeMax - beforeMin;
+    const accel = afterMax - afterMin;
+    if (accel > 0) {
+      ratios.push(decel / accel);
+    }
+
+    // Asymmetry: difference in speed profiles
+    const beforeMean = beforeSpeeds.reduce((s, v) => s + v, 0) / beforeSpeeds.length;
+    const afterMean = afterSpeeds.reduce((s, v) => s + v, 0) / afterSpeeds.length;
+    const totalMean = (beforeMean + afterMean) / 2;
+    if (totalMean > 0) {
+      asymmetries.push(Math.abs(beforeMean - afterMean) / totalMean);
+    }
+  }
+
+  if (ratios.length < 2) return { ...fail, changeCount: ratios.length };
+
+  const decelAccelRatio = ratios.reduce((s, v) => s + v, 0) / ratios.length;
+  const avgAsymmetry = asymmetries.length > 0
+    ? asymmetries.reduce((s, v) => s + v, 0) / asymmetries.length
+    : 0;
+
+  return { decelAccelRatio, changeCount: ratios.length, avgAsymmetry };
+}
+
+/**
+ * Analyze reaction times to trajectory direction changes.
+ * Humans follow an ex-Gaussian distribution (right-skewed, mean ~200-350ms).
+ */
+export function analyzeReactionTimes(
+  cursorPoints: CursorPoint[],
+  changeEvents: TrajectoryChangeEvent[],
+  cursorStartT: number,
+): ReactionTimeMetrics {
+  const fail: ReactionTimeMetrics = { meanRT: 0, rtStdDev: 0, rtSkewness: 0, rtCV: 0, sampleCount: 0 };
+  if (cursorPoints.length < 20 || changeEvents.length < 2) return fail;
+
+  const reactionTimes: number[] = [];
+
+  for (const event of changeEvents) {
+    const eventAbsT = cursorStartT + event.t;
+    const newDirMag = Math.sqrt(event.newVx ** 2 + event.newVy ** 2);
+    if (newDirMag < 1) continue;
+    const ndx = event.newVx / newDirMag;
+    const ndy = event.newVy / newDirMag;
+
+    // Find when cursor direction aligns with new ball direction
+    for (let i = 1; i < cursorPoints.length; i++) {
+      if (cursorPoints[i].t < eventAbsT) continue;
+      if (cursorPoints[i].t > eventAbsT + 800) break; // max 800ms window
+
+      const cdx = cursorPoints[i].x - cursorPoints[i - 1].x;
+      const cdy = cursorPoints[i].y - cursorPoints[i - 1].y;
+      const cmag = Math.sqrt(cdx * cdx + cdy * cdy);
+      if (cmag < 1) continue;
+
+      const dot = (cdx / cmag) * ndx + (cdy / cmag) * ndy;
+      if (dot > 0.5) {
+        reactionTimes.push(cursorPoints[i].t - eventAbsT);
+        break;
+      }
+    }
+  }
+
+  if (reactionTimes.length < 3) return { ...fail, sampleCount: reactionTimes.length };
+
+  const n = reactionTimes.length;
+  const meanRT = reactionTimes.reduce((s, v) => s + v, 0) / n;
+  const rtStdDev = Math.sqrt(reactionTimes.reduce((s, v) => s + (v - meanRT) ** 2, 0) / (n - 1));
+  const rtCV = meanRT > 0 ? rtStdDev / meanRT : 0;
+
+  // Skewness
+  const s3 = reactionTimes.reduce((s, v) => s + ((v - meanRT) / (rtStdDev || 1)) ** 3, 0) / n;
+
+  return { meanRT, rtStdDev, rtSkewness: s3, rtCV, sampleCount: n };
 }

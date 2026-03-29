@@ -1,4 +1,4 @@
-import type { BallAnalysisMetrics, CursorPoint } from '../types';
+import type { BallAnalysisMetrics, CursorPoint, ClientEnvironment, RequestMeta } from '../types';
 
 function normalize(value: number, min: number, max: number): number {
   if (max <= min) return 0;
@@ -144,6 +144,389 @@ function scorePowerLaw(m: PowerLawMetrics): number {
   return betaScore * 0.6 + fitScore * 0.4;
 }
 
+// --- Spectral Timing Analysis ---
+// Detects bots using setInterval/requestAnimationFrame by finding
+// sharp frequency peaks in inter-event timing via DFT.
+
+export interface SpectralMetrics {
+  peakRatio: number;       // ratio of strongest DFT peak to mean magnitude
+  dominantPeriodMs: number; // period of the dominant frequency
+  sampleCount: number;
+}
+
+export function analyzeTimingSpectrum(points: CursorPoint[]): SpectralMetrics {
+  const fail: SpectralMetrics = { peakRatio: 0, dominantPeriodMs: 0, sampleCount: 0 };
+  if (points.length < 20) return fail;
+
+  const intervals: number[] = [];
+  for (let i = 1; i < points.length; i++) {
+    const dt = points[i].t - points[i - 1].t;
+    if (dt > 0) intervals.push(dt);
+  }
+  if (intervals.length < 15) return { ...fail, sampleCount: intervals.length };
+
+  // Remove mean (DC component)
+  const n = intervals.length;
+  const meanInterval = intervals.reduce((s, v) => s + v, 0) / n;
+  const centered = intervals.map(v => v - meanInterval);
+
+  // DFT — only compute magnitudes for frequencies up to N/2
+  const numFreqs = Math.floor(n / 2);
+  const magnitudes: number[] = [];
+
+  for (let k = 1; k <= numFreqs; k++) {
+    let re = 0, im = 0;
+    for (let j = 0; j < n; j++) {
+      const angle = (2 * Math.PI * k * j) / n;
+      re += centered[j] * Math.cos(angle);
+      im -= centered[j] * Math.sin(angle);
+    }
+    magnitudes.push(Math.sqrt(re * re + im * im) / n);
+  }
+
+  if (magnitudes.length === 0) return { ...fail, sampleCount: n };
+
+  const meanMag = magnitudes.reduce((s, v) => s + v, 0) / magnitudes.length;
+  let maxMag = 0, maxK = 1;
+  for (let i = 0; i < magnitudes.length; i++) {
+    if (magnitudes[i] > maxMag) {
+      maxMag = magnitudes[i];
+      maxK = i + 1;
+    }
+  }
+
+  const peakRatio = meanMag > 0 ? maxMag / meanMag : 0;
+  const dominantPeriodMs = (n * meanInterval) / maxK;
+
+  return { peakRatio, dominantPeriodMs, sampleCount: n };
+}
+
+export function isSpectralBotFlag(m: SpectralMetrics): boolean {
+  // For random human noise, peak/mean ≈ 2-5. For strong periodic signals, > 10.
+  return m.sampleCount >= 30 && m.peakRatio > 8.0;
+}
+
+function scoreSpectral(m: SpectralMetrics): number {
+  if (m.sampleCount < 15) return 0.5;
+  // Random noise has peak/mean ≈ 2-5; periodic signals have much higher.
+  if (m.peakRatio < 3.0) return 1.0;    // very noisy (human)
+  if (m.peakRatio < 5.0) return 0.8;    // somewhat noisy
+  if (m.peakRatio < 7.0) return 0.5;    // suspicious
+  if (m.peakRatio < 9.0) return 0.3;    // likely periodic
+  return 0.1;                              // strong periodicity (bot)
+}
+
+// --- Jerk Analysis ---
+// Jerk = derivative of acceleration. Human movement follows minimum-jerk profiles
+// producing smooth bell-shaped velocity curves. Bots have zero or discontinuous jerk.
+
+export interface JerkMetrics {
+  jerkStdDev: number;    // standard deviation of jerk values
+  jerkZeroRatio: number; // fraction of near-zero jerk segments
+  sampleCount: number;
+}
+
+export function analyzeJerk(points: CursorPoint[]): JerkMetrics {
+  const fail: JerkMetrics = { jerkStdDev: 0, jerkZeroRatio: 1, sampleCount: 0 };
+  if (points.length < 10) return fail;
+
+  // Compute velocities
+  const velocities: number[] = [];
+  const times: number[] = [];
+  for (let i = 1; i < points.length; i++) {
+    const dt = points[i].t - points[i - 1].t;
+    if (dt <= 0) continue;
+    const dx = points[i].x - points[i - 1].x;
+    const dy = points[i].y - points[i - 1].y;
+    velocities.push(Math.sqrt(dx * dx + dy * dy) / dt * 1000);
+    times.push((points[i].t + points[i - 1].t) / 2);
+  }
+
+  // Compute accelerations
+  const accels: number[] = [];
+  const accelTimes: number[] = [];
+  for (let i = 1; i < velocities.length; i++) {
+    const dt = times[i] - times[i - 1];
+    if (dt <= 0) continue;
+    accels.push((velocities[i] - velocities[i - 1]) / dt * 1000);
+    accelTimes.push((times[i] + times[i - 1]) / 2);
+  }
+
+  // Compute jerk
+  const jerks: number[] = [];
+  for (let i = 1; i < accels.length; i++) {
+    const dt = accelTimes[i] - accelTimes[i - 1];
+    if (dt <= 0) continue;
+    jerks.push((accels[i] - accels[i - 1]) / dt * 1000);
+  }
+
+  if (jerks.length < 5) return { ...fail, sampleCount: jerks.length };
+
+  const jerkMean = jerks.reduce((s, v) => s + v, 0) / jerks.length;
+  const jerkStdDev = Math.sqrt(jerks.reduce((s, v) => s + (v - jerkMean) ** 2, 0) / (jerks.length - 1));
+
+  const JERK_ZERO_THRESHOLD = 50;
+  const nearZero = jerks.filter(j => Math.abs(j) < JERK_ZERO_THRESHOLD).length;
+  const jerkZeroRatio = nearZero / jerks.length;
+
+  return { jerkStdDev, jerkZeroRatio, sampleCount: jerks.length };
+}
+
+function scoreJerk(m: JerkMetrics): number {
+  if (m.sampleCount < 5) return 0.5;
+
+  // High jerk variation = human (complex movement dynamics)
+  const variationScore = normalize(m.jerkStdDev, 100, 50000);
+
+  // Low zero-ratio = human (jerk is rarely exactly zero)
+  // High zero-ratio = bot (constant acceleration segments)
+  const zeroScore = m.jerkZeroRatio < 0.3 ? 1.0
+    : m.jerkZeroRatio < 0.5 ? 0.7
+    : m.jerkZeroRatio < 0.7 ? 0.4
+    : 0.1;
+
+  return variationScore * 0.6 + zeroScore * 0.4;
+}
+
+// --- Sub-movement Segmentation ---
+// Human reaching movements consist of 15-40 velocity peaks in a typical 8-second task.
+// Too few = smooth bot interpolation. Too regular = noise-injecting bot.
+
+export interface SubMovementMetrics {
+  peakCount: number;
+  peakRegularity: number; // CV of inter-peak intervals (low = too regular)
+  duration: number;       // total duration in ms
+}
+
+export function analyzeSubMovements(points: CursorPoint[]): SubMovementMetrics {
+  const fail: SubMovementMetrics = { peakCount: 0, peakRegularity: 0, duration: 0 };
+  if (points.length < 20) return fail;
+
+  const duration = points[points.length - 1].t - points[0].t;
+  if (duration < 500) return { ...fail, duration };
+
+  // Compute smoothed speed profile
+  const speeds: number[] = [];
+  const speedTimes: number[] = [];
+  for (let i = 1; i < points.length; i++) {
+    const dt = points[i].t - points[i - 1].t;
+    if (dt <= 0) continue;
+    const dx = points[i].x - points[i - 1].x;
+    const dy = points[i].y - points[i - 1].y;
+    speeds.push(Math.sqrt(dx * dx + dy * dy) / dt * 1000);
+    speedTimes.push(points[i].t);
+  }
+
+  if (speeds.length < 15) return { ...fail, duration };
+
+  // Simple moving average smoothing (window=5)
+  const smoothed: number[] = [];
+  const SMOOTH_WIN = Math.min(5, Math.floor(speeds.length / 4));
+  for (let i = 0; i < speeds.length; i++) {
+    let sum = 0, count = 0;
+    for (let j = Math.max(0, i - SMOOTH_WIN); j <= Math.min(speeds.length - 1, i + SMOOTH_WIN); j++) {
+      sum += speeds[j];
+      count++;
+    }
+    smoothed.push(sum / count);
+  }
+
+  // Find velocity peaks (local maxima above noise floor)
+  const meanSpeed = smoothed.reduce((s, v) => s + v, 0) / smoothed.length;
+  const noiseFloor = meanSpeed * 0.3;
+  const peakIndices: number[] = [];
+
+  for (let i = 1; i < smoothed.length - 1; i++) {
+    if (smoothed[i] > smoothed[i - 1] && smoothed[i] > smoothed[i + 1] && smoothed[i] > noiseFloor) {
+      peakIndices.push(i);
+    }
+  }
+
+  if (peakIndices.length < 2) return { peakCount: peakIndices.length, peakRegularity: 0, duration };
+
+  // Compute inter-peak interval regularity (CV)
+  const peakIntervals: number[] = [];
+  for (let i = 1; i < peakIndices.length; i++) {
+    peakIntervals.push(speedTimes[peakIndices[i]] - speedTimes[peakIndices[i - 1]]);
+  }
+  const meanInterval = peakIntervals.reduce((s, v) => s + v, 0) / peakIntervals.length;
+  const intervalStdDev = Math.sqrt(
+    peakIntervals.reduce((s, v) => s + (v - meanInterval) ** 2, 0) / peakIntervals.length
+  );
+  const peakRegularity = meanInterval > 0 ? intervalStdDev / meanInterval : 0;
+
+  return { peakCount: peakIndices.length, peakRegularity, duration };
+}
+
+function scoreSubMovements(m: SubMovementMetrics): number {
+  if (m.duration < 500 || m.peakCount < 2) return 0.5;
+
+  // Normalize peak count per second, expect ~2-5 peaks/sec for humans
+  const peaksPerSec = m.peakCount / (m.duration / 1000);
+  let countScore: number;
+  if (peaksPerSec < 0.5) countScore = 0.1;       // too few (smooth bot)
+  else if (peaksPerSec < 1.5) countScore = 0.5;
+  else if (peaksPerSec <= 6) countScore = 1.0;    // human range
+  else if (peaksPerSec <= 10) countScore = 0.6;
+  else countScore = 0.2;                            // too many (noise bot)
+
+  // Peak regularity: humans have irregular peaks (CV > 0.3)
+  let regularityScore: number;
+  if (m.peakRegularity < 0.1) regularityScore = 0.1;  // too regular (bot)
+  else if (m.peakRegularity < 0.25) regularityScore = 0.4;
+  else if (m.peakRegularity <= 1.0) regularityScore = 1.0;
+  else regularityScore = 0.7;                           // very irregular but ok
+
+  return countScore * 0.6 + regularityScore * 0.4;
+}
+
+// --- Drift/Bias Detection ---
+// Human cursor movement has systematic biases. Perfectly symmetric error distributions
+// suggest synthetic input.
+
+export interface DriftMetrics {
+  xSkewness: number;
+  ySkewness: number;
+  biasSymmetry: number; // |skewX - skewY| — low = suspiciously symmetric
+}
+
+export function analyzeDrift(points: CursorPoint[]): DriftMetrics {
+  const fail: DriftMetrics = { xSkewness: 0, ySkewness: 0, biasSymmetry: 0 };
+  if (points.length < 20) return fail;
+
+  const dxs: number[] = [];
+  const dys: number[] = [];
+  for (let i = 1; i < points.length; i++) {
+    dxs.push(points[i].x - points[i - 1].x);
+    dys.push(points[i].y - points[i - 1].y);
+  }
+
+  function skewness(values: number[]): number {
+    const n = values.length;
+    if (n < 3) return 0;
+    const m = values.reduce((s, v) => s + v, 0) / n;
+    const s2 = values.reduce((s, v) => s + (v - m) ** 2, 0) / n;
+    const s3 = values.reduce((s, v) => s + (v - m) ** 3, 0) / n;
+    const sd = Math.sqrt(s2);
+    if (sd < 1e-10) return 0;
+    return s3 / (sd * sd * sd);
+  }
+
+  const xSkewness = skewness(dxs);
+  const ySkewness = skewness(dys);
+  const biasSymmetry = Math.abs(Math.abs(xSkewness) - Math.abs(ySkewness));
+
+  return { xSkewness, ySkewness, biasSymmetry };
+}
+
+function scoreDrift(m: DriftMetrics): number {
+  // Humans have asymmetric biases — some skewness is expected
+  const hasSkew = Math.abs(m.xSkewness) > 0.1 || Math.abs(m.ySkewness) > 0.1;
+
+  // biasSymmetry: higher = more asymmetric between axes = more human
+  // Very low biasSymmetry + no skewness = suspicious
+  if (!hasSkew && m.biasSymmetry < 0.05) return 0.2; // perfectly centered, symmetric
+
+  if (m.biasSymmetry < 0.05) return 0.4; // symmetric but at least some skew
+  if (m.biasSymmetry < 0.2) return 0.7;
+  return 1.0; // good asymmetry
+}
+
+// --- Timestamp Validation ---
+// Hard flag: non-monotonic timestamps, duplicates, or resolution-locked intervals.
+
+export function isTimestampBotFlag(points: CursorPoint[]): boolean {
+  if (points.length < 10) return false;
+
+  // Check strictly increasing
+  for (let i = 1; i < points.length; i++) {
+    if (points[i].t <= points[i - 1].t) return true;
+  }
+
+  // Check for resolution-locked intervals (>80% identical ±0.1ms)
+  const intervals: number[] = [];
+  for (let i = 1; i < points.length; i++) {
+    intervals.push(points[i].t - points[i - 1].t);
+  }
+
+  if (intervals.length < 10) return false;
+
+  // Count how many intervals match the most common value
+  const buckets = new Map<number, number>();
+  for (const iv of intervals) {
+    const key = Math.round(iv * 10); // 0.1ms precision
+    buckets.set(key, (buckets.get(key) ?? 0) + 1);
+  }
+  let maxCount = 0;
+  for (const count of buckets.values()) {
+    if (count > maxCount) maxCount = count;
+  }
+
+  return maxCount / intervals.length > 0.8;
+}
+
+// --- Environment Bot Detection ---
+// Analyzes client-collected browser signals and HTTP request headers.
+
+export function isEnvironmentBotFlag(env?: ClientEnvironment, meta?: RequestMeta): boolean {
+  if (!env) return false;
+
+  // navigator.webdriver is set by Selenium, Puppeteer, Playwright
+  if (env.webdriver) return true;
+
+  // Headless browsers often have 0 outer dimensions
+  if (env.outerWidth === 0 && env.outerHeight === 0 && env.screenWidth > 0) return true;
+
+  return false;
+}
+
+export function scoreEnvironment(env?: ClientEnvironment, meta?: RequestMeta): number {
+  if (!env && !meta) return 0.5; // no data — neutral
+
+  let score = 1.0;
+  let signals = 0;
+
+  if (env) {
+    signals++;
+    if (env.webdriver) return 0.0; // hard zero
+
+    // Plugin count: real browsers typically have plugins
+    if (env.pluginCount === 0) score -= 0.15;
+
+    // Language count: headless browsers often have 0 or 1
+    if (env.languageCount === 0) score -= 0.15;
+    else if (env.languageCount === 1) score -= 0.05;
+
+    // Outer dimensions: headless = 0
+    if (env.outerWidth === 0 && env.outerHeight === 0) score -= 0.2;
+
+    // Color depth: unusual values
+    if (env.colorDepth < 16) score -= 0.1;
+
+    // Device pixel ratio: 0 or extremely high is suspicious
+    if (env.devicePixelRatio === 0) score -= 0.1;
+  }
+
+  if (meta) {
+    signals++;
+    // Missing User-Agent is very suspicious
+    if (!meta.userAgent || meta.userAgent.length < 10) score -= 0.15;
+
+    // Missing Accept-Language
+    if (!meta.acceptLanguage) score -= 0.1;
+
+    // Known headless indicators in User-Agent
+    if (meta.userAgent) {
+      const ua = meta.userAgent.toLowerCase();
+      if (ua.includes('headless')) score -= 0.3;
+      if (ua.includes('phantomjs')) score -= 0.3;
+    }
+  }
+
+  if (signals === 0) return 0.5;
+  return Math.max(0, Math.min(1, score));
+}
+
 function dist(a: CursorPoint, b: CursorPoint): number {
   return Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2);
 }
@@ -215,7 +598,16 @@ export function analyzeBehavior(points: CursorPoint[]): BehavioralMetrics {
   };
 }
 
-export function scoreBehavioral(m: BehavioralMetrics, powerLaw?: PowerLawMetrics): number {
+export interface BehavioralSignals {
+  powerLaw?: PowerLawMetrics;
+  spectral?: SpectralMetrics;
+  jerk?: JerkMetrics;
+  subMovement?: SubMovementMetrics;
+  drift?: DriftMetrics;
+  envScore?: number; // pre-computed environment score (0-1)
+}
+
+export function scoreBehavioral(m: BehavioralMetrics, signals: BehavioralSignals = {}): number {
   const pointScore = normalize(m.pointCount, 10, 200);
   const speedCV = m.averageSpeed > 0 ? m.speedStdDev / m.averageSpeed : 0;
   const speedScore = normalize(speedCV, 0.05, 0.6);
@@ -223,20 +615,88 @@ export function scoreBehavioral(m: BehavioralMetrics, powerLaw?: PowerLawMetrics
   const tsScore = normalize(m.timestampRegularity, 0.5, 10);
   const jitterScore = m.microJitterScore;
   const pauseScore = normalize(m.pauseCount, 0, 5);
-  const plScore = powerLaw ? scorePowerLaw(powerLaw) : 0.5;
+  const plScore = signals.powerLaw ? scorePowerLaw(signals.powerLaw) : 0.5;
+  const specScore = signals.spectral ? scoreSpectral(signals.spectral) : 0.5;
+  const jkScore = signals.jerk ? scoreJerk(signals.jerk) : 0.5;
+  const smScore = signals.subMovement ? scoreSubMovements(signals.subMovement) : 0.5;
+  const drScore = signals.drift ? scoreDrift(signals.drift) : 0.5;
+  const enScore = signals.envScore ?? 0.5;
 
   return (
-    pointScore * 0.15 +
-    speedScore * 0.15 +
-    accelScore * 0.12 +
-    tsScore * 0.13 +
-    jitterScore * 0.13 +
-    pauseScore * 0.12 +
-    plScore * 0.20
+    pointScore * 0.07 +
+    speedScore * 0.07 +
+    accelScore * 0.06 +
+    tsScore * 0.07 +
+    jitterScore * 0.07 +
+    pauseScore * 0.06 +
+    plScore * 0.14 +
+    specScore * 0.12 +
+    jkScore * 0.10 +
+    smScore * 0.10 +
+    drScore * 0.07 +
+    enScore * 0.07
   );
 }
 
-function scoreBallTracking(m: BallAnalysisMetrics): number {
+// --- Ball-specific scoring types (computed in analyze.ts) ---
+
+export interface SpeedProfileMetrics {
+  decelAccelRatio: number; // ratio of deceleration to acceleration phase around turns
+  changeCount: number;     // number of direction changes analyzed
+  avgAsymmetry: number;    // average asymmetry of speed profiles
+}
+
+export interface ReactionTimeMetrics {
+  meanRT: number;       // mean reaction time in ms
+  rtStdDev: number;     // std dev of reaction times
+  rtSkewness: number;   // skewness (humans: positive/right-skewed)
+  rtCV: number;         // coefficient of variation
+  sampleCount: number;
+}
+
+function scoreSpeedProfile(m?: SpeedProfileMetrics): number {
+  if (!m || m.changeCount < 3) return 0.5;
+  // Humans decelerate longer than they accelerate (ratio > 1.0)
+  let ratioScore: number;
+  if (m.decelAccelRatio < 0.5) ratioScore = 0.2;      // no deceleration (bot)
+  else if (m.decelAccelRatio < 0.8) ratioScore = 0.5;
+  else if (m.decelAccelRatio <= 2.0) ratioScore = 1.0; // human range
+  else ratioScore = 0.6;                                // excessive deceleration
+
+  // Asymmetry should exist (humans have asymmetric speed curves)
+  const asymScore = normalize(m.avgAsymmetry, 0.05, 0.5);
+
+  return ratioScore * 0.6 + asymScore * 0.4;
+}
+
+function scoreReactionTime(m?: ReactionTimeMetrics): number {
+  if (!m || m.sampleCount < 3) return 0.5;
+
+  // Mean RT: 100-500ms is human, <50ms is impossible
+  let meanScore: number;
+  if (m.meanRT < 50) meanScore = 0.0;       // impossibly fast
+  else if (m.meanRT < 100) meanScore = 0.3;  // very fast
+  else if (m.meanRT <= 500) meanScore = 1.0; // human range
+  else meanScore = 0.5;                       // slow but could be human
+
+  // Skewness: humans have positive skew (right tail, ex-Gaussian)
+  let skewScore: number;
+  if (m.rtSkewness < -0.2) skewScore = 0.2;   // negative skew = bot-like
+  else if (m.rtSkewness < 0.1) skewScore = 0.5; // near-symmetric
+  else if (m.rtSkewness <= 2.0) skewScore = 1.0; // healthy positive skew
+  else skewScore = 0.7;                           // very skewed but ok
+
+  // CV: humans have moderate variability (0.15-0.5)
+  let cvScore: number;
+  if (m.rtCV < 0.05) cvScore = 0.1;       // too consistent (bot)
+  else if (m.rtCV < 0.15) cvScore = 0.5;
+  else if (m.rtCV <= 0.6) cvScore = 1.0;  // human range
+  else cvScore = 0.6;                       // very variable but ok
+
+  return meanScore * 0.4 + skewScore * 0.3 + cvScore * 0.3;
+}
+
+function scoreBallTracking(m: BallAnalysisMetrics, speedProfile?: SpeedProfileMetrics, reactionTime?: ReactionTimeMetrics): number {
   // Distance: humans are imprecise — average 30-120px is normal.
   // Only penalize very tight (bot-like) or very far (not following).
   let distanceScore: number;
@@ -267,13 +727,18 @@ function scoreBallTracking(m: BallAnalysisMetrics): number {
   else if (m.trackingCoverage <= 0.97) coverageScore = 1.0;
   else coverageScore = 0.4; // suspiciously perfect
 
+  const spScore = scoreSpeedProfile(speedProfile);
+  const rtScore = scoreReactionTime(reactionTime);
+
   return (
-    distanceScore * 0.20 +
-    distVariationScore * 0.15 +
-    lagScore * 0.20 +
-    lagConsistencyScore * 0.15 +
-    overshootScore * 0.10 +
-    coverageScore * 0.20
+    distanceScore * 0.15 +
+    distVariationScore * 0.12 +
+    lagScore * 0.15 +
+    lagConsistencyScore * 0.12 +
+    overshootScore * 0.08 +
+    coverageScore * 0.15 +
+    spScore * 0.10 +
+    rtScore * 0.13
   );
 }
 
@@ -289,18 +754,34 @@ export interface BallScoreResult {
 export function computeBallScore(
   cursorPoints: CursorPoint[],
   ballMetrics: BallAnalysisMetrics,
+  speedProfile?: SpeedProfileMetrics,
+  reactionTime?: ReactionTimeMetrics,
+  clientEnv?: ClientEnvironment,
+  requestMeta?: RequestMeta,
 ): BallScoreResult {
-  // Power law hard-flag: immediate bot verdict if movement violates the law
+  // Hard flags — immediate bot verdict
+  if (isTimestampBotFlag(cursorPoints)) return { score: 0, verdict: 'bot' };
+  if (isEnvironmentBotFlag(clientEnv, requestMeta)) return { score: 0, verdict: 'bot' };
+
   const powerLaw = analyzePowerLaw(cursorPoints);
-  if (isPowerLawBotFlag(powerLaw)) {
-    return { score: 0, verdict: 'bot' };
-  }
+  if (isPowerLawBotFlag(powerLaw)) return { score: 0, verdict: 'bot' };
+
+  const spectral = analyzeTimingSpectrum(cursorPoints);
+  if (isSpectralBotFlag(spectral)) return { score: 0, verdict: 'bot' };
+
+  // Compute all behavioral signals
+  const jerk = analyzeJerk(cursorPoints);
+  const subMovement = analyzeSubMovements(cursorPoints);
+  const drift = analyzeDrift(cursorPoints);
+  const envScore = scoreEnvironment(clientEnv, requestMeta);
 
   const behavioral = analyzeBehavior(cursorPoints);
-  const behavScore = scoreBehavioral(behavioral, powerLaw);
-  const ballScore = scoreBallTracking(ballMetrics);
+  const behavScore = scoreBehavioral(behavioral, {
+    powerLaw, spectral, jerk, subMovement, drift, envScore,
+  });
+  const ballScore = scoreBallTracking(ballMetrics, speedProfile, reactionTime);
 
-  const score = Math.max(0, Math.min(1, 0.50 * behavScore + 0.50 * ballScore));
+  const score = Math.max(0, Math.min(1, 0.45 * behavScore + 0.45 * ballScore + 0.10 * envScore));
 
   let verdict: 'bot' | 'human' | 'uncertain';
   if (score < 0.25) verdict = 'bot';

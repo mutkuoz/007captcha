@@ -9,4 +9,5 @@ export type {
   VerifyResult, TokenPayload, ChallengeMethod, ShapeType,
   BallVisuals, BallFrame, BallShape, CursorPoint, BallVerifyResult,
   MazeVerifyResult, ShapeVerifyResult, ZoneRect,
+  ClientEnvironment, RequestMeta,
 } from './types';
