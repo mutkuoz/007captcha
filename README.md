@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="007-logo.png" alt="007captcha" width="180">
+  <img src="007-logo.png" alt="007captcha" width="270">
 </p>
 
 <h1 align="center">007captcha</h1>
