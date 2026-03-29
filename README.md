@@ -2,10 +2,10 @@
   <img src="007-logo.png" alt="007captcha" width="270">
 </p>
 
-<h1 align="center">007captcha</h1>
+<h1 align="center">007captcha - The Robophobic Verification Framework</h1>
 
 <p align="center">
-  Behavioral captcha that catches bots through real-time interaction analysis.
+  Behavioral captcha that catches bots & AI agents through real-time interaction analysis.
 </p>
 
 <p align="center">
@@ -42,7 +42,7 @@ All verification runs **server-side**. The client never holds scoring logic, det
 
 ### Ball Following &nbsp;&mdash;&nbsp; *recommended*
 
-A ball moves unpredictably across a canvas for 8 seconds. The user follows it with their cursor. The trajectory is generated **server-side in real-time** and streamed frame-by-frame as rendered images via SSE &mdash; future positions never exist on the client. An AI agent with full JavaScript access cannot predict where the ball will go next.
+The most precise & tested verification method. A ball moves unpredictably across a canvas for 8 seconds. The user follows it with their cursor. The trajectory is generated **server-side in real-time** and streamed frame-by-frame as rendered images via SSE &mdash; future positions never exist on the client. An AI agent with full JavaScript access cannot predict where the ball will go next.
 
 Ball and background colors change randomly mid-challenge to prevent frame-matching attacks. The canvas renders directly to `<canvas>` with no video element and no extractable DOM asset.
 
