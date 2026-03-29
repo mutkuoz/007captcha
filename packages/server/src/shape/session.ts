@@ -1,7 +1,7 @@
 import { createHmac, randomBytes } from 'crypto';
 import type { CursorPoint, ShapeType, ShapeVerifyResult } from '../types';
 import { analyzeShape } from './analyze';
-import { analyzeBehavior, scoreBehavioral } from '../ball/scoring';
+import { analyzeBehavior, scoreBehavioral, analyzePowerLaw, isPowerLawBotFlag } from '../ball/scoring';
 
 const SHAPES: ShapeType[] = ['circle', 'triangle', 'square'];
 const SESSION_TTL_MS = 60_000;
@@ -75,9 +75,16 @@ export class ShapeChallengeManager {
       return { success: false, score: 0, verdict: 'bot', token: '', error: `shape_mismatch (${shapeResult.matchScore.toFixed(3)})` };
     }
 
-    // Behavioral scoring
+    // Power law hard-flag: immediate bot verdict if movement violates the law
+    const powerLaw = analyzePowerLaw(cursorPoints);
+    if (isPowerLawBotFlag(powerLaw)) {
+      this.sessions.delete(sessionId);
+      return { success: false, score: 0, verdict: 'bot', token: '', error: 'power_law_violation' };
+    }
+
+    // Behavioral scoring (with power law integrated)
     const behavioral = analyzeBehavior(cursorPoints);
-    const behavScore = scoreBehavioral(behavioral);
+    const behavScore = scoreBehavioral(behavioral, powerLaw);
 
     // Shape perfection: high perfection = bot-like, so invert
     const shapeScore = 1.0 - shapeResult.perfectionScore;

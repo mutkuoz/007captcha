@@ -4,7 +4,7 @@ import { generateMaze } from './generate';
 import { solveMaze } from './solve';
 import { renderMazeImage } from './renderer';
 import { analyzeMazePath } from './analyze';
-import { analyzeBehavior, scoreBehavioral } from '../ball/scoring';
+import { analyzeBehavior, scoreBehavioral, analyzePowerLaw, isPowerLawBotFlag } from '../ball/scoring';
 
 const MAZE_ROWS = 6;
 const MAZE_COLS = 8;
@@ -128,9 +128,16 @@ export class MazeChallengeManager {
       return { success: false, score: 0, verdict: 'bot', token: '', error: reason };
     }
 
-    // Behavioral scoring
+    // Power law hard-flag: immediate bot verdict if movement violates the law
+    const powerLaw = analyzePowerLaw(cursorPoints);
+    if (isPowerLawBotFlag(powerLaw)) {
+      this.sessions.delete(sessionId);
+      return { success: false, score: 0, verdict: 'bot', token: '', error: 'power_law_violation' };
+    }
+
+    // Behavioral scoring (with power law integrated)
     const behavioral = analyzeBehavior(cursorPoints);
-    const behavScore = scoreBehavioral(behavioral);
+    const behavScore = scoreBehavioral(behavioral, powerLaw);
 
     const score = Math.max(0, Math.min(1, 0.50 * behavScore + 0.50 * mazeScore));
 
