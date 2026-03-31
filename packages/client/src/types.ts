@@ -4,6 +4,11 @@ export interface CapturePoint {
   y: number;
   t: number; // timestamp in ms (performance.now())
   pressure?: number;
+  movementX?: number;
+  movementY?: number;
+  tiltX?: number;
+  tiltY?: number;
+  pointerType?: string;
 }
 
 /** Challenge method discriminator */

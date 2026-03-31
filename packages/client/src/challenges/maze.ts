@@ -121,7 +121,11 @@ export class MazeChallenge implements ChallengeInstance {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        points: this.points.map(p => ({ x: p.x, y: p.y, t: p.t })),
+        points: this.points.map(p => ({
+          x: p.x, y: p.y, t: p.t,
+          movementX: p.movementX, movementY: p.movementY,
+          tiltX: p.tiltX, tiltY: p.tiltY, pointerType: p.pointerType,
+        })),
         origin: window.location.origin,
         clientEnv: collectEnvironment(),
       }),
@@ -176,7 +180,11 @@ export class MazeChallenge implements ChallengeInstance {
     this.drawing = true;
     this.ctx.canvas.setPointerCapture(e.pointerId);
     this.points = [];
-    this.points.push({ x, y, t: performance.now(), pressure: e.pressure });
+    this.points.push({
+      x, y, t: performance.now(), pressure: e.pressure,
+      movementX: e.movementX, movementY: e.movementY,
+      tiltX: e.tiltX, tiltY: e.tiltY, pointerType: e.pointerType,
+    });
 
     this.ctx.ctx.strokeStyle = '#3b82f6';
     this.ctx.ctx.lineWidth = 2.5;
@@ -189,7 +197,11 @@ export class MazeChallenge implements ChallengeInstance {
   private onPointerMove(e: PointerEvent): void {
     if (!this.drawing || !this.exit) return;
     const { x, y } = this.getCoords(e);
-    this.points.push({ x, y, t: performance.now(), pressure: e.pressure });
+    this.points.push({
+      x, y, t: performance.now(), pressure: e.pressure,
+      movementX: e.movementX, movementY: e.movementY,
+      tiltX: e.tiltX, tiltY: e.tiltY, pointerType: e.pointerType,
+    });
 
     this.ctx.ctx.lineTo(x, y);
     this.ctx.ctx.stroke();

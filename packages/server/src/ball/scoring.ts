@@ -1,4 +1,4 @@
-import type { BallAnalysisMetrics, CursorPoint, ClientEnvironment, RequestMeta } from '../types';
+import type { BallAnalysisMetrics, CursorPoint, ClientEnvironment, RequestMeta, IncrementalState } from '../types';
 
 function normalize(value: number, min: number, max: number): number {
   if (max <= min) return 0;
@@ -432,6 +432,188 @@ function scoreDrift(m: DriftMetrics): number {
   return 1.0; // good asymmetry
 }
 
+// --- Mouse Event Property Analysis ---
+// Playwright's page.mouse.move() doesn't populate movementX/Y correctly (they stay 0).
+// Real browser events have movementX/Y matching position deltas.
+
+export function isMousePropertyBotFlag(points: CursorPoint[]): boolean {
+  if (points.length < 30) return false;
+
+  // Only check if points actually have movementX/Y data
+  const withMovement = points.filter(p => p.movementX !== undefined && p.movementY !== undefined);
+  if (withMovement.length < 20) return false; // no data = can't flag
+
+  // Count points where position changed but movementX/Y are both 0
+  let zeroMovementCount = 0;
+  let positionChangedCount = 0;
+  for (let i = 1; i < withMovement.length; i++) {
+    const dx = Math.abs(withMovement[i].x - withMovement[i - 1].x);
+    const dy = Math.abs(withMovement[i].y - withMovement[i - 1].y);
+    if (dx > 1 || dy > 1) {
+      positionChangedCount++;
+      if (withMovement[i].movementX === 0 && withMovement[i].movementY === 0) {
+        zeroMovementCount++;
+      }
+    }
+  }
+
+  // If >90% of position-changing points have zero movement deltas = Playwright
+  if (positionChangedCount >= 20 && zeroMovementCount / positionChangedCount > 0.9) return true;
+
+  return false;
+}
+
+// Soft score: capped at 0.52 max (never significantly rewards)
+function scoreMouseProperties(points: CursorPoint[]): number {
+  const withMovement = points.filter(p => p.movementX !== undefined);
+  if (withMovement.length < 10) return 0.5; // no data = neutral
+
+  let zeroCount = 0, posChanged = 0;
+  for (let i = 1; i < withMovement.length; i++) {
+    const dx = Math.abs(withMovement[i].x - withMovement[i - 1].x);
+    const dy = Math.abs(withMovement[i].y - withMovement[i - 1].y);
+    if (dx > 1 || dy > 1) {
+      posChanged++;
+      if (withMovement[i].movementX === 0 && withMovement[i].movementY === 0) zeroCount++;
+    }
+  }
+  if (posChanged < 10) return 0.5;
+  const zeroRatio = zeroCount / posChanged;
+  if (zeroRatio > 0.8) return 0.1;
+  if (zeroRatio > 0.5) return 0.3;
+  return 0.52; // looks good, but cap reward
+}
+
+// --- Point Density Analysis ---
+// Playwright's mouse.move(x, y, {steps: N}) generates evenly-spaced points.
+// Real human movement has variable spacing.
+
+export interface PointDensityMetrics {
+  spacingCV: number;            // coefficient of variation of inter-point distances
+  spacingAutocorrelation: number; // lag-1 autocorrelation (bots ≈ 0.9+, humans ≈ 0.1-0.5)
+  linearSegmentRatio: number;   // fraction of collinear 3-point triplets
+  sampleCount: number;
+}
+
+export function analyzePointDensity(points: CursorPoint[]): PointDensityMetrics {
+  const fail: PointDensityMetrics = { spacingCV: 1, spacingAutocorrelation: 0, linearSegmentRatio: 0, sampleCount: 0 };
+  if (points.length < 20) return fail;
+
+  // Inter-point distances
+  const dists: number[] = [];
+  for (let i = 1; i < points.length; i++) {
+    const dx = points[i].x - points[i - 1].x;
+    const dy = points[i].y - points[i - 1].y;
+    dists.push(Math.sqrt(dx * dx + dy * dy));
+  }
+
+  if (dists.length < 15) return { ...fail, sampleCount: dists.length };
+
+  // CV of spacing
+  const meanDist = dists.reduce((s, v) => s + v, 0) / dists.length;
+  const distStdDev = Math.sqrt(dists.reduce((s, v) => s + (v - meanDist) ** 2, 0) / (dists.length - 1));
+  const spacingCV = meanDist > 0.01 ? distStdDev / meanDist : 1;
+
+  // Lag-1 autocorrelation of distances
+  let autoNum = 0, autoDen = 0;
+  for (let i = 0; i < dists.length - 1; i++) {
+    autoNum += (dists[i] - meanDist) * (dists[i + 1] - meanDist);
+    autoDen += (dists[i] - meanDist) ** 2;
+  }
+  // Add last element to denominator
+  autoDen += (dists[dists.length - 1] - meanDist) ** 2;
+  const spacingAutocorrelation = autoDen > 0.001 ? autoNum / autoDen : 0;
+
+  // Collinearity: for each triplet, check if middle point lies on line between outer points
+  let collinearCount = 0;
+  let tripletCount = 0;
+  for (let i = 0; i < points.length - 2; i++) {
+    const a = points[i], b = points[i + 1], c = points[i + 2];
+    const abDist = Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2);
+    const acDist = Math.sqrt((c.x - a.x) ** 2 + (c.y - a.y) ** 2);
+    if (acDist < 1) continue; // skip stationary
+    tripletCount++;
+    // Perpendicular distance of b from line a→c
+    const cross = Math.abs((c.x - a.x) * (a.y - b.y) - (a.x - b.x) * (c.y - a.y));
+    const perpDist = cross / acDist;
+    // If perpendicular distance is <1% of segment length, it's collinear
+    if (perpDist < Math.max(0.5, acDist * 0.01)) collinearCount++;
+  }
+  const linearSegmentRatio = tripletCount > 0 ? collinearCount / tripletCount : 0;
+
+  return { spacingCV, spacingAutocorrelation, linearSegmentRatio, sampleCount: dists.length };
+}
+
+export function isPointDensityBotFlag(m: PointDensityMetrics): boolean {
+  if (m.sampleCount < 30) return false;
+  // Extremely uniform spacing (CV < 0.08) = linear interpolation
+  if (m.spacingCV < 0.08) return true;
+  // Very high autocorrelation = identical step sizes
+  if (m.spacingAutocorrelation > 0.92) return true;
+  // Nearly all points are collinear = straight-line interpolation
+  if (m.linearSegmentRatio > 0.85 && m.sampleCount >= 50) return true;
+  return false;
+}
+
+// Soft score: capped at 0.52 (penalizes bots, doesn't reward humans)
+function scorePointDensity(m: PointDensityMetrics): number {
+  if (m.sampleCount < 15) return 0.5;
+  let score = 0.52; // max possible
+  if (m.spacingCV < 0.15) score -= 0.3;
+  else if (m.spacingCV < 0.25) score -= 0.15;
+  if (m.spacingAutocorrelation > 0.8) score -= 0.2;
+  else if (m.spacingAutocorrelation > 0.6) score -= 0.1;
+  if (m.linearSegmentRatio > 0.7) score -= 0.2;
+  else if (m.linearSegmentRatio > 0.5) score -= 0.1;
+  return Math.max(0, score);
+}
+
+// --- Incremental Cursor Timing Validation ---
+// If the ball challenge uses incremental cursor submission, validate that
+// batches arrived throughout the streaming period (not all at the end).
+
+export function isIncrementalTimingBotFlag(
+  state: IncrementalState,
+  streamStartedAt: number,
+  durationMs: number,
+): boolean {
+  // No batches at all during an 8-second stream = definitely not real-time
+  if (state.batches.length === 0) return true;
+
+  // Expect at least floor(duration / 800ms) batches (500ms interval with slack)
+  const minBatches = Math.max(2, Math.floor(durationMs / 800));
+  if (state.batches.length < minBatches) return true;
+
+  // Check that batches span at least 60% of the streaming duration
+  const firstBatch = state.batches[0].receivedAt;
+  const lastBatch = state.batches[state.batches.length - 1].receivedAt;
+  const batchSpan = lastBatch - firstBatch;
+  if (batchSpan < durationMs * 0.5) return true;
+
+  // Check that no more than 40% of batches arrived in the last 15% of the session
+  const lateThreshold = streamStartedAt + durationMs * 0.85;
+  const lateBatches = state.batches.filter(b => b.receivedAt > lateThreshold).length;
+  if (lateBatches / state.batches.length > 0.4) return true;
+
+  return false;
+}
+
+// --- Nonce Validation ---
+// Each SSE frame includes a nonce. The client must hash nonce:x:y:t and submit hashes.
+// If the client never computed nonces, or most are wrong, it's a bot.
+
+export function isNonceValidationBotFlag(
+  validRatio: number,
+  totalFramesSent: number,
+  totalHashesSubmitted: number,
+): boolean {
+  // Client submitted zero nonce hashes for a session with many frames
+  if (totalHashesSubmitted === 0 && totalFramesSent > 10) return true;
+  // Most hashes are wrong (< 30% valid)
+  if (totalHashesSubmitted > 5 && validRatio < 0.3) return true;
+  return false;
+}
+
 // --- Timestamp Validation ---
 // Hard flag: non-monotonic timestamps, duplicates, or resolution-locked intervals.
 
@@ -758,16 +940,36 @@ export function computeBallScore(
   reactionTime?: ReactionTimeMetrics,
   clientEnv?: ClientEnvironment,
   requestMeta?: RequestMeta,
+  incrementalState?: IncrementalState,
+  nonceValidation?: { validRatio: number; totalFramesSent: number; totalHashesSubmitted: number },
+  streamStartedAt?: number,
+  durationMs?: number,
 ): BallScoreResult {
-  // Hard flags — immediate bot verdict
+  // Hard flags — immediate bot verdict (cheapest first)
   if (isTimestampBotFlag(cursorPoints)) return { score: 0, verdict: 'bot' };
   if (isEnvironmentBotFlag(clientEnv, requestMeta)) return { score: 0, verdict: 'bot' };
+  if (isMousePropertyBotFlag(cursorPoints)) return { score: 0, verdict: 'bot' };
+
+  const pointDensity = analyzePointDensity(cursorPoints);
+  if (isPointDensityBotFlag(pointDensity)) return { score: 0, verdict: 'bot' };
 
   const powerLaw = analyzePowerLaw(cursorPoints);
   if (isPowerLawBotFlag(powerLaw)) return { score: 0, verdict: 'bot' };
 
   const spectral = analyzeTimingSpectrum(cursorPoints);
   if (isSpectralBotFlag(spectral)) return { score: 0, verdict: 'bot' };
+
+  // Anti-Playwright hard flags (only when data is available)
+  if (incrementalState && streamStartedAt && durationMs) {
+    if (isIncrementalTimingBotFlag(incrementalState, streamStartedAt, durationMs)) {
+      return { score: 0, verdict: 'bot' };
+    }
+  }
+  if (nonceValidation) {
+    if (isNonceValidationBotFlag(nonceValidation.validRatio, nonceValidation.totalFramesSent, nonceValidation.totalHashesSubmitted)) {
+      return { score: 0, verdict: 'bot' };
+    }
+  }
 
   // Compute all behavioral signals
   const jerk = analyzeJerk(cursorPoints);
@@ -781,7 +983,18 @@ export function computeBallScore(
   });
   const ballScore = scoreBallTracking(ballMetrics, speedProfile, reactionTime);
 
-  const score = Math.max(0, Math.min(1, 0.45 * behavScore + 0.45 * ballScore + 0.10 * envScore));
+  // Anti-Playwright soft scores (capped, can only penalize)
+  const mpScore = scoreMouseProperties(cursorPoints);
+  const pdScore = scorePointDensity(pointDensity);
+
+  // Final composite: behavioral + ball tracking + env + anti-Playwright penalty signals
+  const score = Math.max(0, Math.min(1,
+    0.42 * behavScore +
+    0.42 * ballScore +
+    0.08 * envScore +
+    0.04 * mpScore +
+    0.04 * pdScore
+  ));
 
   let verdict: 'bot' | 'human' | 'uncertain';
   if (score < 0.25) verdict = 'bot';

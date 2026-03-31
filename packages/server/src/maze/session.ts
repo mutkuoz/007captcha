@@ -8,6 +8,7 @@ import {
   analyzeBehavior, scoreBehavioral, analyzePowerLaw, isPowerLawBotFlag,
   analyzeTimingSpectrum, isSpectralBotFlag, analyzeJerk, analyzeSubMovements,
   analyzeDrift, isTimestampBotFlag, isEnvironmentBotFlag, scoreEnvironment,
+  isMousePropertyBotFlag, analyzePointDensity, isPointDensityBotFlag,
 } from '../ball/scoring';
 
 const MAZE_ROWS = 6;
@@ -137,6 +138,15 @@ export class MazeChallengeManager {
     if (isEnvironmentBotFlag(clientEnv, requestMeta)) {
       this.sessions.delete(sessionId);
       return { success: false, score: 0, verdict: 'bot', token: '', error: 'environment_violation' };
+    }
+    if (isMousePropertyBotFlag(cursorPoints)) {
+      this.sessions.delete(sessionId);
+      return { success: false, score: 0, verdict: 'bot', token: '', error: 'mouse_property_violation' };
+    }
+    const pointDensity = analyzePointDensity(cursorPoints);
+    if (isPointDensityBotFlag(pointDensity)) {
+      this.sessions.delete(sessionId);
+      return { success: false, score: 0, verdict: 'bot', token: '', error: 'point_density_violation' };
     }
     const powerLaw = analyzePowerLaw(cursorPoints);
     if (isPowerLawBotFlag(powerLaw)) {

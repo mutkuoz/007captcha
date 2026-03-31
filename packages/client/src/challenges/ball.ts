@@ -31,6 +31,13 @@ export class BallChallenge implements ChallengeInstance {
   private boundClick: ((e: MouseEvent) => void) | null = null;
   private boundMove: ((e: PointerEvent) => void) | null = null;
 
+  // Anti-Playwright: nonce hashes from SSE frames
+  private nonceHashes: Array<{ fi: number; h: string }> = [];
+  // Anti-Playwright: incremental cursor batch submission
+  private batchInterval: ReturnType<typeof setInterval> | null = null;
+  private batchIndex = 0;
+  private lastBatchPointIndex = 0;
+
   // Store the server's verdict/token after submission
   private serverResult: { token: string; score: number; verdict: 'bot' | 'human' | 'uncertain' } | null = null;
 
@@ -80,6 +87,7 @@ export class BallChallenge implements ChallengeInstance {
 
   stop(): void {
     this.tracking = false;
+    if (this.batchInterval) { clearInterval(this.batchInterval); this.batchInterval = null; }
     if (this.eventSource) {
       this.eventSource.close();
       this.eventSource = null;
@@ -96,6 +104,9 @@ export class BallChallenge implements ChallengeInstance {
   reset(): void {
     this.stop();
     this.points = [];
+    this.nonceHashes = [];
+    this.batchIndex = 0;
+    this.lastBatchPointIndex = 0;
     this.sessionId = null;
     this.visuals = null;
     this.clickStarted = false;
@@ -111,10 +122,15 @@ export class BallChallenge implements ChallengeInstance {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        points: this.points.map(p => ({ x: p.x, y: p.y, t: p.t })),
+        points: this.points.map(p => ({
+          x: p.x, y: p.y, t: p.t,
+          movementX: p.movementX, movementY: p.movementY,
+          tiltX: p.tiltX, tiltY: p.tiltY, pointerType: p.pointerType,
+        })),
         cursorStartT: this.trackingStartT,
         origin: window.location.origin,
         clientEnv: collectEnvironment(),
+        nonceHashes: this.nonceHashes,
       }),
     });
 
@@ -198,6 +214,9 @@ export class BallChallenge implements ChallengeInstance {
 
     this.tracking = true;
     this.points = [];
+    this.nonceHashes = [];
+    this.batchIndex = 0;
+    this.lastBatchPointIndex = 0;
     this.trackingStartT = performance.now();
 
     const textEl = this.challengeCtx.instructionEl.querySelector('.instruction-text');
@@ -208,6 +227,9 @@ export class BallChallenge implements ChallengeInstance {
     this.challengeCtx.canvas.addEventListener('pointermove', this.boundMove);
     this.challengeCtx.canvas.style.touchAction = 'none';
     this.challengeCtx.canvas.style.cursor = 'crosshair';
+
+    // Start incremental cursor batch submission (every 500ms)
+    this.batchInterval = setInterval(() => this.sendCursorBatch(), 500);
 
     // Open SSE stream to receive frames from server
     this.eventSource = new EventSource(
@@ -225,10 +247,16 @@ export class BallChallenge implements ChallengeInstance {
         }
       };
       img.src = `data:image/png;base64,${data.img}`;
+
+      // Compute nonce hash if nonce present
+      if (data.nonce && data.fi !== undefined) {
+        this.computeNonceHash(data.nonce, data.fi);
+      }
     });
 
     this.eventSource.addEventListener('end', () => {
       this.tracking = false;
+      if (this.batchInterval) { clearInterval(this.batchInterval); this.batchInterval = null; }
       if (this.eventSource) {
         this.eventSource.close();
         this.eventSource = null;
@@ -239,6 +267,7 @@ export class BallChallenge implements ChallengeInstance {
     this.eventSource.onerror = () => {
       // Stream error — stop tracking
       this.tracking = false;
+      if (this.batchInterval) { clearInterval(this.batchInterval); this.batchInterval = null; }
       if (this.eventSource) {
         this.eventSource.close();
         this.eventSource = null;
@@ -254,6 +283,51 @@ export class BallChallenge implements ChallengeInstance {
       y: e.clientY - rect.top,
       t: performance.now(),
       pressure: e.pressure,
+      movementX: e.movementX,
+      movementY: e.movementY,
+      tiltX: e.tiltX,
+      tiltY: e.tiltY,
+      pointerType: e.pointerType,
     });
+  }
+
+  /** Send accumulated cursor points as an incremental batch to the server. */
+  private sendCursorBatch(): void {
+    if (!this.sessionId || !this.tracking) return;
+    const newPoints = this.points.slice(this.lastBatchPointIndex);
+    if (newPoints.length === 0) return;
+
+    const batch = {
+      bi: this.batchIndex++,
+      pts: newPoints.map(p => ({ x: p.x, y: p.y, t: p.t })),
+      ct: performance.now(),
+    };
+    this.lastBatchPointIndex = this.points.length;
+
+    // Fire-and-forget — don't block on response
+    fetch(`${this.serverUrl}/captcha/ball/${this.sessionId}/cursor-batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(batch),
+    }).catch(() => { /* ignore batch send failures */ });
+  }
+
+  /** Compute SHA-256 hash of nonce:x:y:t for frame-cursor binding. */
+  private async computeNonceHash(nonce: string, fi: number): Promise<void> {
+    // Find the closest cursor point to this frame
+    const now = performance.now();
+    const closestPoint = this.points.length > 0
+      ? this.points[this.points.length - 1]
+      : null;
+    if (!closestPoint) return;
+
+    const payload = `${nonce}:${Math.round(closestPoint.x)}:${Math.round(closestPoint.y)}:${Math.round(closestPoint.t)}`;
+    try {
+      const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(payload));
+      const hash = Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+      this.nonceHashes.push({ fi, h: hash });
+    } catch {
+      // crypto.subtle not available (e.g., non-HTTPS) — skip nonce
+    }
   }
 }

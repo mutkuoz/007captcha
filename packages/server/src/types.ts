@@ -45,6 +45,29 @@ export interface CursorPoint {
   x: number;
   y: number;
   t: number; // client-side timestamp (performance.now based)
+  movementX?: number; // PointerEvent.movementX (relative delta)
+  movementY?: number; // PointerEvent.movementY (relative delta)
+  tiltX?: number;     // PointerEvent.tiltX
+  tiltY?: number;     // PointerEvent.tiltY
+  pointerType?: string; // 'mouse', 'pen', 'touch'
+}
+
+/** Nonce hash submitted by the client to prove it saw a specific frame */
+export interface NonceHash {
+  fi: number;  // frame index
+  h: string;   // SHA-256 hex hash of nonce:x:y:t
+}
+
+/** Cursor batch submitted incrementally during the ball challenge */
+export interface CursorBatch {
+  bi: number;          // batch index (0, 1, 2, ...)
+  pts: CursorPoint[];  // cursor points in this batch
+  ct: number;          // client timestamp (performance.now)
+}
+
+/** Server-side state for incremental cursor validation */
+export interface IncrementalState {
+  batches: Array<{ receivedAt: number; bi: number; pointCount: number }>;
 }
 
 /** Ball-specific analysis metrics (server-side) */

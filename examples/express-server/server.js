@@ -70,16 +70,22 @@ app.get('/captcha/ball/:id/stream', (req, res) => {
   });
 });
 
+/** Receive incremental cursor batches during streaming */
+app.post('/captcha/ball/:id/cursor-batch', (req, res) => {
+  const ok = ballManager.receiveCursorBatch(req.params.id, req.body);
+  res.json({ ok });
+});
+
 /** Verify cursor points against the recorded ball trajectory */
 app.post('/captcha/ball/:id/verify', (req, res) => {
   const sessionId = req.params.id;
-  const { points, cursorStartT, origin, clientEnv } = req.body;
+  const { points, cursorStartT, origin, clientEnv, nonceHashes } = req.body;
   const requestMeta = {
     userAgent: req.headers['user-agent'],
     acceptLanguage: req.headers['accept-language'],
   };
 
-  const result = ballManager.verify(sessionId, points || [], cursorStartT || 0, origin || '', clientEnv, requestMeta);
+  const result = ballManager.verify(sessionId, points || [], cursorStartT || 0, origin || '', clientEnv, requestMeta, nonceHashes);
   res.json(result);
 });
 
