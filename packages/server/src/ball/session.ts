@@ -176,6 +176,7 @@ export class BallChallengeManager {
     const reactionTime = analyzeReactionTimes(cursorPoints, changeEvents, cursorStartT);
     const { score, verdict } = computeBallScore(
       cursorPoints, ballMetrics, speedProfile, reactionTime, clientEnv, requestMeta,
+      session.physics.directionChangeCount,
     );
 
     // Create signed token

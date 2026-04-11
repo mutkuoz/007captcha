@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { computeBallScore } from '../scoring';
+import type { ReactionTimeMetrics } from '../scoring';
 import type { BallAnalysisMetrics, CursorPoint } from '../../types';
 
 function makeHumanCursorPoints(): CursorPoint[] {
@@ -104,6 +105,36 @@ describe('computeBallScore — hard flags from ball tracking', () => {
 
   it('accepts moderately tracking cursor (frameWithinTight ~0.75)', () => {
     const result = computeBallScore(makeHumanCursorPoints(), makeHumanBallMetrics());
+    expect(result.verdict).not.toBe('bot');
+  });
+});
+
+describe('computeBallScore — reaction time hard flag (Fix 2)', () => {
+  it('returns bot verdict when ball had >=3 direction changes but 0 RT samples', () => {
+    const rt: ReactionTimeMetrics = { meanRT: 0, rtStdDev: 0, rtSkewness: 0, rtCV: 0, sampleCount: 0 };
+    const result = computeBallScore(
+      makeHumanCursorPoints(),
+      makeHumanBallMetrics(),
+      undefined,
+      rt,
+      undefined,
+      undefined,
+      /* directionChangeCount */ 5,
+    );
+    expect(result.verdict).toBe('bot');
+  });
+
+  it('does not hard-flag when ball had 0 direction changes and 0 RT samples', () => {
+    const rt: ReactionTimeMetrics = { meanRT: 0, rtStdDev: 0, rtSkewness: 0, rtCV: 0, sampleCount: 0 };
+    const result = computeBallScore(
+      makeHumanCursorPoints(),
+      makeHumanBallMetrics(),
+      undefined,
+      rt,
+      undefined,
+      undefined,
+      /* directionChangeCount */ 0,
+    );
     expect(result.verdict).not.toBe('bot');
   });
 });

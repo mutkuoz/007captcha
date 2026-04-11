@@ -669,8 +669,21 @@ function scoreSpeedProfile(m?: SpeedProfileMetrics): number {
   return ratioScore * 0.6 + asymScore * 0.4;
 }
 
-function scoreReactionTime(m?: ReactionTimeMetrics): number {
-  if (!m || m.sampleCount < 3) return 0.5;
+function scoreReactionTime(m?: ReactionTimeMetrics, directionChangeCount = 0): number {
+  if (!m) return 0.5;
+
+  // No direction changes happened — reaction time doesn't apply
+  if (directionChangeCount === 0) return 0.5;
+
+  // Direction changes occurred but fewer than 3 RT samples captured
+  if (m.sampleCount < 3) {
+    if (m.sampleCount === 0) {
+      // Should have been hard-flagged upstream, but be defensive
+      return 0.0;
+    }
+    // 1-2 samples is insufficient — heavy penalty instead of neutral 0.5
+    return 0.1;
+  }
 
   // Mean RT: 100-500ms is human, <50ms is impossible
   let meanScore: number;
@@ -696,7 +709,12 @@ function scoreReactionTime(m?: ReactionTimeMetrics): number {
   return meanScore * 0.4 + skewScore * 0.3 + cvScore * 0.3;
 }
 
-function scoreBallTracking(m: BallAnalysisMetrics, speedProfile?: SpeedProfileMetrics, reactionTime?: ReactionTimeMetrics): number {
+function scoreBallTracking(
+  m: BallAnalysisMetrics,
+  speedProfile?: SpeedProfileMetrics,
+  reactionTime?: ReactionTimeMetrics,
+  directionChangeCount = 0,
+): number {
   // Distance (Fix 3: tightened band)
   // Hard flags for <10px and >0.9 coverage are handled upstream in computeBallScore.
   let distanceScore: number;
@@ -730,7 +748,7 @@ function scoreBallTracking(m: BallAnalysisMetrics, speedProfile?: SpeedProfileMe
   const tightnessScore = normalize(m.frameWithinTight, 0.55, 0.85);
 
   const spScore = scoreSpeedProfile(speedProfile);
-  const rtScore = scoreReactionTime(reactionTime);
+  const rtScore = scoreReactionTime(reactionTime, directionChangeCount);
 
   return (
     distanceScore * 0.10 +
@@ -761,6 +779,7 @@ export function computeBallScore(
   reactionTime?: ReactionTimeMetrics,
   clientEnv?: ClientEnvironment,
   requestMeta?: RequestMeta,
+  directionChangeCount = 0,
 ): BallScoreResult {
   // Hard flags — immediate bot verdict
   if (isTimestampBotFlag(cursorPoints)) return { score: 0, verdict: 'bot' };
@@ -788,6 +807,11 @@ export function computeBallScore(
     return { score: 0, verdict: 'bot' };
   }
 
+  // Fix 2 — zero reaction time when direction changes occurred
+  if (directionChangeCount >= 3 && reactionTime && reactionTime.sampleCount === 0) {
+    return { score: 0, verdict: 'bot' };
+  }
+
   // Compute all behavioral signals
   const jerk = analyzeJerk(cursorPoints);
   const subMovement = analyzeSubMovements(cursorPoints);
@@ -798,7 +822,7 @@ export function computeBallScore(
   const behavScore = scoreBehavioral(behavioral, {
     powerLaw, spectral, jerk, subMovement, drift, envScore,
   });
-  const ballScore = scoreBallTracking(ballMetrics, speedProfile, reactionTime);
+  const ballScore = scoreBallTracking(ballMetrics, speedProfile, reactionTime, directionChangeCount);
 
   const score = Math.max(0, Math.min(1, 0.45 * behavScore + 0.45 * ballScore + 0.10 * envScore));
 
