@@ -410,8 +410,14 @@ export function analyzeFrameAcks(
     return 'bad_latency';
   }
 
-  // Zero variance (< 0.5ms stddev) is a replay signature
-  if (latStd < 0.5) {
+  // Zero/near-zero variance is a pure-replay signature. The threshold was
+  // calibrated from real human traces on localhost (2026-04-12): Date.now()'s
+  // 1ms server resolution plus Chrome's performance.now() quantization yields
+  // a natural noise floor around 0.4-0.6ms stddev even with no real network
+  // jitter. A threshold of 0.5ms false-positives localhost users constantly;
+  // 0.05ms (50µs) is well below any real clock-quantization floor while
+  // still catching deterministic setTimeout-based replay bots (stddev = 0).
+  if (latStd < 0.05) {
     return 'constant_latency';
   }
 
