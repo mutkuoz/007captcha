@@ -6,18 +6,18 @@ export interface ChallengeContext {
   ctx: CanvasRenderingContext2D;
   instructionEl: HTMLDivElement;
   strokeColor: string;
-  /** Challenge calls this when it auto-completes (e.g., maze exit reached) */
+  /** Challenge calls this when it auto-completes (e.g., ball stream ended) */
   onComplete: () => void;
 }
 
 /** Interface that every challenge method must implement */
 export interface ChallengeInstance {
   getMethod(): ChallengeMethod;
-  /** Identifier for the token: 'circle', 'triangle', 'square', 'maze' */
+  /** Identifier for the token (currently always 'ball') */
   getChallengeId(): string;
   /** Header text shown during the challenge */
   getTitle(): string;
-  /** Whether the "Done" button is shown (shape: true, maze: false) */
+  /** Whether the "Done" button is shown (ball: false — auto-completes) */
   showDoneButton: boolean;
   /** Override time limit in ms, or null to use config default */
   timeLimit: number | null;

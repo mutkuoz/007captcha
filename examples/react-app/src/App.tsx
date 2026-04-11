@@ -1,8 +1,6 @@
 import { useState } from 'react';
 import { OOSevenCaptcha } from '@007captcha/react';
 
-type Method = 'ball' | 'shape' | 'maze' | 'random';
-
 interface VerifyResult {
   success: boolean;
   score: number;
@@ -11,15 +9,7 @@ interface VerifyResult {
   error?: string;
 }
 
-const METHODS: { value: Method; label: string; icon: string }[] = [
-  { value: 'shape', label: 'Shape', icon: '\u25EF' },
-  { value: 'maze', label: 'Maze', icon: '\uD83D\uDDFA\uFE0F' },
-  { value: 'ball', label: 'Ball', icon: '\u26AB' },
-  { value: 'random', label: 'Random', icon: '\uD83C\uDFB2' },
-];
-
 export default function App() {
-  const [method, setMethod] = useState<Method>('ball');
   const [token, setToken] = useState<string | null>(null);
   const [result, setResult] = useState<VerifyResult | null>(null);
   const [verifying, setVerifying] = useState(false);
@@ -52,8 +42,7 @@ export default function App() {
     }
   };
 
-  const switchMethod = (m: Method) => {
-    setMethod(m);
+  const handleReset = () => {
     setToken(null);
     setResult(null);
     setKey((k) => k + 1);
@@ -64,45 +53,31 @@ export default function App() {
       <div style={styles.card}>
         <h1 style={styles.title}>007captcha + React</h1>
         <p style={styles.subtitle}>
-          Complete the challenge, then click Verify to test server-side validation.
+          Follow the ball with your cursor, then click Verify.
         </p>
-
-        <div style={styles.methods}>
-          {METHODS.map((m) => (
-            <button
-              key={m.value}
-              onClick={() => switchMethod(m.value)}
-              style={{
-                ...styles.methodBtn,
-                ...(method === m.value ? styles.methodBtnActive : {}),
-              }}
-            >
-              <span style={{ fontSize: 18 }}>{m.icon}</span>
-              <span style={{ fontSize: 13, fontWeight: 600 }}>{m.label}</span>
-            </button>
-          ))}
-        </div>
 
         <OOSevenCaptcha
           key={key}
           siteKey="demo-site-key-change-me"
-          method={method}
           serverUrl={window.location.origin}
           onSuccess={handleSuccess}
           onFailure={handleFailure}
         />
 
-        <button
-          onClick={handleVerify}
-          disabled={!token || verifying}
-          style={{
-            ...styles.verifyBtn,
-            opacity: !token || verifying ? 0.4 : 1,
-            cursor: !token || verifying ? 'not-allowed' : 'pointer',
-          }}
-        >
-          {verifying ? 'Verifying...' : 'Verify'}
-        </button>
+        <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+          <button
+            onClick={handleVerify}
+            disabled={!token || verifying}
+            style={{
+              ...styles.verifyBtn,
+              opacity: !token || verifying ? 0.4 : 1,
+              cursor: !token || verifying ? 'not-allowed' : 'pointer',
+            }}
+          >
+            {verifying ? 'Verifying...' : 'Verify'}
+          </button>
+          <button onClick={handleReset} style={styles.resetBtn}>Reset</button>
+        </div>
 
         {result && (
           <pre
@@ -139,46 +114,10 @@ const styles: Record<string, React.CSSProperties> = {
     maxWidth: 580,
     alignSelf: 'flex-start',
   },
-  title: {
-    fontSize: 20,
-    fontWeight: 700,
-    margin: 0,
-    marginBottom: 4,
-    color: '#111827',
-  },
-  subtitle: {
-    fontSize: 13,
-    color: '#6b7280',
-    margin: 0,
-    marginBottom: 24,
-  },
-  methods: {
-    display: 'flex',
-    gap: 6,
-    marginBottom: 16,
-  },
-  methodBtn: {
-    flex: 1,
-    display: 'flex',
-    flexDirection: 'column' as const,
-    alignItems: 'center',
-    gap: 2,
-    padding: '8px 4px',
-    border: '2px solid #d1d5db',
-    borderRadius: 8,
-    background: '#fff',
-    cursor: 'pointer',
-    color: '#374151',
-    transition: 'all 0.15s',
-  },
-  methodBtnActive: {
-    borderColor: '#111827',
-    background: '#111827',
-    color: '#fff',
-  },
+  title: { fontSize: 20, fontWeight: 700, margin: 0, marginBottom: 4, color: '#111827' },
+  subtitle: { fontSize: 13, color: '#6b7280', margin: 0, marginBottom: 24 },
   verifyBtn: {
-    width: '100%',
-    marginTop: 16,
+    flex: 1,
     background: '#111827',
     color: '#fff',
     border: 'none',
@@ -186,6 +125,16 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '10px 20px',
     fontSize: 14,
     fontWeight: 600,
+  },
+  resetBtn: {
+    background: '#fff',
+    color: '#374151',
+    border: '1px solid #d1d5db',
+    borderRadius: 8,
+    padding: '10px 20px',
+    fontSize: 14,
+    fontWeight: 600,
+    cursor: 'pointer',
   },
   result: {
     marginTop: 16,
@@ -196,7 +145,5 @@ const styles: Record<string, React.CSSProperties> = {
     whiteSpace: 'pre-wrap' as const,
     wordBreak: 'break-all' as const,
     border: '1px solid',
-    margin: 0,
-    marginTop: 16,
   },
 };

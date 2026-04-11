@@ -132,12 +132,6 @@ export class BallChallenge implements ChallengeInstance {
         averageSpeed: 0, speedStdDev: 0, accelerationStdDev: 0,
         timestampRegularity: 0, microJitterScore: 0, pauseCount: 0,
       },
-      shapePerfection: {
-        shapeType: 'circle',
-        matchScore: data.score,
-        perfectionScore: 1 - data.score,
-        details: {},
-      },
       verdict: data.verdict,
     };
   }

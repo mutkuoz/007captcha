@@ -1,5 +1,5 @@
 import express from 'express';
-import { verify, BallChallengeManager, MazeChallengeManager, ShapeChallengeManager } from '../../packages/server/dist/index.mjs';
+import { verify, BallChallengeManager } from '../../packages/server/dist/index.mjs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
@@ -7,10 +7,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
 const SECRET_KEY = 'demo-site-key-change-me'; // Must match the siteKey used in the client
 
-// Server-side session managers
+// Server-side session manager
 const ballManager = new BallChallengeManager(SECRET_KEY);
-const mazeManager = new MazeChallengeManager(SECRET_KEY);
-const shapeManager = new ShapeChallengeManager(SECRET_KEY);
 
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
@@ -73,53 +71,21 @@ app.get('/captcha/ball/:id/stream', (req, res) => {
 /** Verify cursor points against the recorded ball trajectory */
 app.post('/captcha/ball/:id/verify', (req, res) => {
   const sessionId = req.params.id;
-  const { points, cursorStartT, origin, clientEnv } = req.body;
+  const { points, cursorStartT, frameAcks, origin, clientEnv } = req.body;
   const requestMeta = {
     userAgent: req.headers['user-agent'],
     acceptLanguage: req.headers['accept-language'],
   };
 
-  const result = ballManager.verify(sessionId, points || [], cursorStartT || 0, origin || '', clientEnv, requestMeta);
-  res.json(result);
-});
-
-// ─── Maze challenge endpoints ───
-
-/** Create a new maze challenge session */
-app.post('/captcha/maze/start', (req, res) => {
-  const result = mazeManager.createSession();
-  res.json(result);
-});
-
-/** Verify cursor path against the server's maze */
-app.post('/captcha/maze/:id/verify', (req, res) => {
-  const sessionId = req.params.id;
-  const { points, origin, clientEnv } = req.body;
-  const requestMeta = {
-    userAgent: req.headers['user-agent'],
-    acceptLanguage: req.headers['accept-language'],
-  };
-  const result = mazeManager.verify(sessionId, points || [], origin || '', clientEnv, requestMeta);
-  res.json(result);
-});
-
-// ─── Shape challenge endpoints ───
-
-/** Create a new shape challenge session */
-app.post('/captcha/shape/start', (req, res) => {
-  const result = shapeManager.createSession();
-  res.json(result);
-});
-
-/** Verify cursor points against the server's shape analysis */
-app.post('/captcha/shape/:id/verify', (req, res) => {
-  const sessionId = req.params.id;
-  const { points, origin, clientEnv } = req.body;
-  const requestMeta = {
-    userAgent: req.headers['user-agent'],
-    acceptLanguage: req.headers['accept-language'],
-  };
-  const result = shapeManager.verify(sessionId, points || [], origin || '', clientEnv, requestMeta);
+  const result = ballManager.verify(
+    sessionId,
+    points || [],
+    cursorStartT || 0,
+    frameAcks || [],
+    origin || '',
+    clientEnv,
+    requestMeta,
+  );
   res.json(result);
 });
 
@@ -162,33 +128,6 @@ app.get('/', (_req, res) => {
       color: #6b7280;
       margin-bottom: 24px;
     }
-    .method-select {
-      margin-bottom: 16px;
-      font-size: 13px;
-      color: #374151;
-    }
-    .method-buttons {
-      display: flex;
-      gap: 6px;
-      margin-top: 8px;
-    }
-    .method-btn {
-      flex: 1;
-      padding: 8px 4px;
-      border: 2px solid #d1d5db;
-      border-radius: 8px;
-      background: #fff;
-      font-size: 12px;
-      font-weight: 600;
-      cursor: pointer;
-      text-align: center;
-      transition: all 0.15s;
-      color: #374151;
-    }
-    .method-btn:hover { border-color: #9ca3af; background: #f9fafb; }
-    .method-btn.active { border-color: #111827; background: #111827; color: #fff; }
-    .method-btn .method-icon { display: block; font-size: 18px; margin-bottom: 2px; }
-    .method-btn .method-label { display: block; font-size: 11px; font-weight: 500; opacity: 0.8; }
     #captcha {
       margin-bottom: 16px;
     }
@@ -224,32 +163,7 @@ app.get('/', (_req, res) => {
 <body>
   <div class="card">
     <h1>007captcha + Express</h1>
-    <p class="subtitle">Complete the challenge, then click Verify to test server-side validation.</p>
-    <div class="method-select">
-      Challenge method:
-      <div class="method-buttons">
-        <button class="method-btn" data-method="shape">
-          <span class="method-icon">&#9711;</span>
-          Shape
-          <span class="method-label">Draw</span>
-        </button>
-        <button class="method-btn" data-method="maze">
-          <span class="method-icon">&#128506;</span>
-          Maze
-          <span class="method-label">Navigate</span>
-        </button>
-        <button class="method-btn active" data-method="ball">
-          <span class="method-icon">&#9679;</span>
-          Ball
-          <span class="method-label">Follow</span>
-        </button>
-        <button class="method-btn" data-method="random">
-          <span class="method-icon">&#127922;</span>
-          Random
-          <span class="method-label">Any</span>
-        </button>
-      </div>
-    </div>
+    <p class="subtitle">Follow the ball with your cursor, then click Verify to test server-side validation.</p>
     <form id="form" method="POST" action="/verify">
       <div id="captcha"></div>
       <button type="submit" id="submit-btn" disabled>Verify</button>
@@ -259,42 +173,21 @@ app.get('/', (_req, res) => {
   <script src="/captcha/index.global.js"></script>
   <script>
     let captchaToken = null;
-    let widget = null;
 
-    function initCaptcha(method) {
-      if (widget) widget.destroy();
-      captchaToken = null;
-      document.getElementById('submit-btn').disabled = true;
-      document.getElementById('result').className = '';
-
-      widget = OOSevenCaptcha.render({
-        siteKey: '${SECRET_KEY}',
-        container: '#captcha',
-        method: method,
-        serverUrl: window.location.origin,
-        onSuccess(token) {
-          captchaToken = token;
-          document.getElementById('submit-btn').disabled = false;
-          console.log('Token received:', token.slice(0, 40) + '...');
-        },
-        onFailure(err) {
-          captchaToken = null;
-          document.getElementById('submit-btn').disabled = true;
-          console.log('Challenge failed:', err.message);
-        }
-      });
-    }
-
-    // Initialize with ball (recommended method)
-    initCaptcha('ball');
-
-    // Method button switching
-    document.querySelectorAll('.method-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        document.querySelectorAll('.method-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        initCaptcha(btn.dataset.method);
-      });
+    const widget = OOSevenCaptcha.render({
+      siteKey: '${SECRET_KEY}',
+      container: '#captcha',
+      serverUrl: window.location.origin,
+      onSuccess(token) {
+        captchaToken = token;
+        document.getElementById('submit-btn').disabled = false;
+        console.log('Token received:', token.slice(0, 40) + '...');
+      },
+      onFailure(err) {
+        captchaToken = null;
+        document.getElementById('submit-btn').disabled = true;
+        console.log('Challenge failed:', err.message);
+      }
     });
 
     document.getElementById('form').addEventListener('submit', async (e) => {
