@@ -19,6 +19,8 @@ export class BallChallenge implements ChallengeInstance {
   private serverUrl: string;
   private siteKey: string;
   private points: CapturePoint[] = [];
+  private frameAcks: Array<{ i: number; t: number; x: number; y: number }> = [];
+  private lastCursor: { x: number; y: number } = { x: 0, y: 0 };
   private challengeCtx: ChallengeContext | null = null;
   private visuals: BallVisuals | null = null;
   private sessionId: string | null = null;
@@ -96,6 +98,7 @@ export class BallChallenge implements ChallengeInstance {
   reset(): void {
     this.stop();
     this.points = [];
+    this.frameAcks = [];
     this.sessionId = null;
     this.visuals = null;
     this.clickStarted = false;
@@ -113,6 +116,7 @@ export class BallChallenge implements ChallengeInstance {
       body: JSON.stringify({
         points: this.points.map(p => ({ x: p.x, y: p.y, t: p.t })),
         cursorStartT: this.trackingStartT,
+        frameAcks: this.frameAcks,
         origin: window.location.origin,
         clientEnv: collectEnvironment(),
       }),
@@ -192,6 +196,8 @@ export class BallChallenge implements ChallengeInstance {
 
     this.tracking = true;
     this.points = [];
+    this.frameAcks = [];
+    this.lastCursor = { x: 240, y: 200 }; // canvas center fallback
     this.trackingStartT = performance.now();
 
     const textEl = this.challengeCtx.instructionEl.querySelector('.instruction-text');
@@ -211,6 +217,16 @@ export class BallChallenge implements ChallengeInstance {
     this.eventSource.addEventListener('frame', (e: MessageEvent) => {
       if (!this.tracking || !this.challengeCtx) return;
       const data = JSON.parse(e.data);
+
+      // Record frame ack: commit to our current cursor position at this moment
+      const now = performance.now();
+      this.frameAcks.push({
+        i: this.frameAcks.length,
+        t: now,
+        x: this.lastCursor.x,
+        y: this.lastCursor.y,
+      });
+
       // Server sends pre-rendered PNG frames — draw directly to canvas
       const img = new Image();
       img.onload = () => {
@@ -243,9 +259,12 @@ export class BallChallenge implements ChallengeInstance {
   private onPointerMove(e: PointerEvent): void {
     if (!this.tracking || !this.challengeCtx) return;
     const rect = this.challengeCtx.canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    this.lastCursor = { x, y };
     this.points.push({
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top,
+      x,
+      y,
       t: performance.now(),
       pressure: e.pressure,
     });
