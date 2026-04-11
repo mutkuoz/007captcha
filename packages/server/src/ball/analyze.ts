@@ -71,6 +71,9 @@ function estimateLag(
 
   const n = Math.min(cursorSamples.length, ballSamples.length);
   const maxLagSteps = Math.min(Math.floor(600 / sampleIntervalMs), Math.floor(n / 3));
+
+  // Discrete cross-correlation: evaluate correlation at each integer lag step.
+  const corrs: number[] = [];
   let bestCorr = -Infinity;
   let bestLag = 0;
 
@@ -85,15 +88,35 @@ function estimateLag(
       sum += -((cx - bx) ** 2 + (cy - by) ** 2);
       count++;
     }
-    if (count === 0) continue;
-    const corr = sum / count;
+    const corr = count > 0 ? sum / count : -Infinity;
+    corrs.push(corr);
     if (corr > bestCorr) {
       bestCorr = corr;
       bestLag = lag;
     }
   }
 
-  return bestLag * sampleIntervalMs;
+  // Sub-sample refinement via parabolic interpolation around the peak.
+  // Without this, lag is quantized to multiples of sampleIntervalMs (e.g., 50ms
+  // buckets with SAMPLE_INTERVAL=50), which causes different runs to collapse
+  // onto the same discrete output and makes lagConsistency artificially clumpy.
+  let refinedLag = bestLag;
+  if (bestLag > 0 && bestLag < corrs.length - 1) {
+    const cPrev = corrs[bestLag - 1];
+    const cPeak = corrs[bestLag];
+    const cNext = corrs[bestLag + 1];
+    const denom = cPrev - 2 * cPeak + cNext;
+    if (Math.abs(denom) > 1e-12) {
+      const offset = 0.5 * (cPrev - cNext) / denom;
+      // Clamp the sub-sample offset to [-0.5, 0.5] — outside that range, the
+      // parabolic fit is extrapolating and we should trust the discrete peak.
+      if (offset > -0.5 && offset < 0.5) {
+        refinedLag = bestLag + offset;
+      }
+    }
+  }
+
+  return refinedLag * sampleIntervalMs;
 }
 
 /**
