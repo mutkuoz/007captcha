@@ -32,6 +32,7 @@ function makeHumanBallMetrics(): BallAnalysisMetrics {
     lagConsistency: 40,
     overshootCount: 3,
     trackingCoverage: 0.70,
+    frameWithinTight: 0.75,
   };
 }
 
@@ -43,6 +44,7 @@ function makeBotBallMetrics(): BallAnalysisMetrics {
     lagConsistency: 2,
     overshootCount: 0,
     trackingCoverage: 0.99,
+    frameWithinTight: 1.0,
   };
 }
 

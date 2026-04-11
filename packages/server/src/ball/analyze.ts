@@ -1,6 +1,8 @@
 import type { CursorPoint, BallFrame, TrajectoryChangeEvent, BallAnalysisMetrics } from '../types';
 import type { SpeedProfileMetrics, ReactionTimeMetrics } from './scoring';
 
+const R_TIGHT = 80;
+
 function mean(values: number[]): number {
   if (values.length === 0) return 0;
   return values.reduce((s, v) => s + v, 0) / values.length;
@@ -112,12 +114,14 @@ export function analyzeBallTracking(
       lagConsistency: 0,
       overshootCount: 0,
       trackingCoverage: 0,
+      frameWithinTight: 0,
     };
   }
 
   // --- Average distance & coverage ---
   const distances: number[] = [];
   let withinRange = 0;
+  let withinTight = 0;
   const TRACKING_RANGE = 150;
 
   for (const p of cursorPoints) {
@@ -127,11 +131,13 @@ export function analyzeBallTracking(
     const d = dist(p.x, p.y, frame.x, frame.y);
     distances.push(d);
     if (d < TRACKING_RANGE) withinRange++;
+    if (d < R_TIGHT) withinTight++;
   }
 
   const averageDistance = mean(distances);
   const distanceSD = stdDev(distances);
   const trackingCoverage = distances.length > 0 ? withinRange / distances.length : 0;
+  const frameWithinTight = distances.length > 0 ? withinTight / distances.length : 0;
 
   // --- Lag estimation via cross-correlation ---
   const SAMPLE_INTERVAL = 50;
@@ -215,6 +221,7 @@ export function analyzeBallTracking(
     lagConsistency,
     overshootCount,
     trackingCoverage,
+    frameWithinTight,
   };
 }
 

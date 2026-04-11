@@ -52,6 +52,8 @@ export interface BallAnalysisMetrics {
   lagConsistency: number;
   overshootCount: number;
   trackingCoverage: number;
+  /** Fraction of cursor samples whose nearest-in-time ball frame is within R_TIGHT (80px). */
+  frameWithinTight: number;
 }
 
 /** Result from ball challenge verification */
