@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="007-logo.png" alt="007captcha" width="180">
+  <img src="007-logo.png" alt="007captcha" width="270">
 </p>
 
-<h1 align="center">007captcha</h1>
+<h1 align="center">007captcha - The Robophobic Verification Framework</h1>
 
 <p align="center">
   Behavioral captcha that catches bots through real-time ball-tracking analysis.
