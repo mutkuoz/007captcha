@@ -59,6 +59,8 @@ export class BallPhysics {
 
   // Recorded data (grows as simulation runs)
   readonly frames: BallFrame[] = [];
+  /** Date.now() at the moment each frame was dispatched, parallel to `frames`. */
+  readonly frameDispatchTimes: number[] = [];
   readonly changeEvents: TrajectoryChangeEvent[] = [];
   readonly colorChangeTimes: number[] = [];
   readonly startX: number;
@@ -186,8 +188,14 @@ export class BallPhysics {
 
     const frame: BallFrame = { x: this.x, y: this.y, t: this.t };
     this.frames.push(frame);
+    this.frameDispatchTimes.push(Date.now());
     this.onFrame?.(frame);
 
     this.t += FRAME_INTERVAL;
+  }
+
+  /** Number of direction-change events recorded during the run. */
+  get directionChangeCount(): number {
+    return this.changeEvents.length;
   }
 }
