@@ -79,28 +79,32 @@ describe('computeBallScore — hard flags from ball tracking', () => {
     expect(result.score).toBe(0);
   });
 
-  it('returns bot verdict when frameWithinTight > 0.95 AND avgDistance < 12 (too tight)', () => {
+  it('returns bot verdict when avgDistance < 5 with tiny stddev (inhuman precision)', () => {
     const metrics: BallAnalysisMetrics = {
       ...makeHumanBallMetrics(),
-      averageDistance: 8,
-      distanceStdDev: 2,
-      frameWithinTight: 0.98,
+      averageDistance: 3,
+      distanceStdDev: 1,
     };
     const result = computeBallScore(makeHumanCursorPoints(), metrics);
     expect(result.verdict).toBe('bot');
     expect(result.score).toBe(0);
   });
 
-  it('returns bot verdict when avgDistance < 10 with tiny stddev (inhuman precision)', () => {
+  it('accepts precise human tracking (cov=1.0, avg≈10px, stddev≈5) — real trace baseline', () => {
+    // Calibrated from real human traces 2026-04-12: precise mouse users
+    // produce cov=1.0, avg=9-13, stddev=4-8, frameWithinTight=1.0 naturally.
+    // These values must not trigger any hard flag.
     const metrics: BallAnalysisMetrics = {
-      ...makeHumanBallMetrics(),
-      averageDistance: 5,
-      distanceStdDev: 1,
-      frameWithinTight: 0.85,
+      averageDistance: 9.54,
+      distanceStdDev: 5.73,
+      estimatedLag: 100,
+      lagConsistency: 132,
+      overshootCount: 3,
+      trackingCoverage: 1.0,
+      frameWithinTight: 1.0,
     };
     const result = computeBallScore(makeHumanCursorPoints(), metrics);
-    expect(result.verdict).toBe('bot');
-    expect(result.score).toBe(0);
+    expect(result.verdict).not.toBe('bot');
   });
 
   it('accepts moderately tracking cursor (frameWithinTight ~0.75)', () => {

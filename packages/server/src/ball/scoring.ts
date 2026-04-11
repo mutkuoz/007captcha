@@ -798,18 +798,21 @@ export function computeBallScore(
   if (isSpectralBotFlag(spectral)) return { score: 0, verdict: 'bot' };
 
   // Fix 1 — frame-level tracking enforcement
+  // Calibrated from real human traces (2026-04-12): precise tracking sits at
+  // avgDistance ~9-13px with frameWithinTight=1.0 against R_TIGHT=80. The
+  // original frameWithinTight>0.95 AND avg<12 flag and coverage>0.9 AND
+  // avg<20 flag both false-positived real humans and have been removed —
+  // frameWithinTight<0.55 alone catches "not tracking".
   if (ballMetrics.frameWithinTight < 0.55) {
     return { score: 0, verdict: 'bot' };
   }
-  if (ballMetrics.frameWithinTight > 0.95 && ballMetrics.averageDistance < 12) {
-    return { score: 0, verdict: 'bot' };
-  }
 
-  // Fix 3 — too-tight hard flag
-  if (ballMetrics.averageDistance < 10 && ballMetrics.distanceStdDev < 3) {
-    return { score: 0, verdict: 'bot' };
-  }
-  if (ballMetrics.trackingCoverage > 0.9 && ballMetrics.averageDistance < 20) {
+  // Fix 3 — inhuman precision hard flag (tightened from <10/<3 to <5/<2).
+  // Real human minimum observed: avg=8.98, stddev=4.06. Threshold leaves a
+  // ~44% safety margin on avg and ~50% on stddev, while still catching both
+  // perfect deterministic bots (avg~0, stddev~0) and lightly-noisy bots
+  // (avg~3, stddev~1).
+  if (ballMetrics.averageDistance < 5 && ballMetrics.distanceStdDev < 2) {
     return { score: 0, verdict: 'bot' };
   }
 
