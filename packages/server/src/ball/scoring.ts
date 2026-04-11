@@ -780,7 +780,13 @@ export function computeBallScore(
   clientEnv?: ClientEnvironment,
   requestMeta?: RequestMeta,
   directionChangeCount = 0,
+  frameAckFlag: string | null = null,
 ): BallScoreResult {
+  // Fix 4 — frame ack validation (computed upstream by analyzeFrameAcks)
+  if (frameAckFlag !== null) {
+    return { score: 0, verdict: 'bot' };
+  }
+
   // Hard flags — immediate bot verdict
   if (isTimestampBotFlag(cursorPoints)) return { score: 0, verdict: 'bot' };
   if (isEnvironmentBotFlag(clientEnv, requestMeta)) return { score: 0, verdict: 'bot' };

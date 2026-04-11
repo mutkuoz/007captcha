@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { BallChallengeManager } from '../session';
+import type { CursorPoint } from '../../types';
 
 const SECRET = 'test-secret';
 // Use short duration for fast tests
@@ -101,6 +102,23 @@ describe('BallChallengeManager', () => {
     const started = manager.startStreaming('nonexistent', () => {}, () => {});
     expect(started).toBe(false);
   });
+
+  it('should return bot verdict when frameAcks are empty but frames were streamed', async () => {
+    manager = new BallChallengeManager(SECRET, { durationMs: TEST_DURATION });
+    const { sessionId } = manager.createSession();
+
+    // Start streaming and let it complete
+    await new Promise<void>((resolve) => {
+      manager.startStreaming(sessionId, () => {}, () => resolve());
+    });
+
+    // Submit empty frameAcks — should fail coverage check
+    const points: CursorPoint[] = Array.from({ length: 30 }, (_, i) => ({
+      x: 200, y: 200, t: i * 16,
+    }));
+    const result = manager.verify(sessionId, points, 0, [], 'test-origin');
+    expect(result.verdict).toBe('bot');
+  }, 10000);
 
   it('should handle color changes internally without exposing to caller', async () => {
     manager = new BallChallengeManager(SECRET, { durationMs: 2000 });

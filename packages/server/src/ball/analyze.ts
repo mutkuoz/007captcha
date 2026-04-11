@@ -1,4 +1,4 @@
-import type { CursorPoint, BallFrame, TrajectoryChangeEvent, BallAnalysisMetrics } from '../types';
+import type { CursorPoint, BallFrame, TrajectoryChangeEvent, BallAnalysisMetrics, FrameAck } from '../types';
 import type { SpeedProfileMetrics, ReactionTimeMetrics } from './scoring';
 
 const R_TIGHT = 80;
@@ -347,4 +347,97 @@ export function analyzeReactionTimes(
   const s3 = reactionTimes.reduce((s, v) => s + ((v - meanRT) / (rtStdDev || 1)) ** 3, 0) / n;
 
   return { meanRT, rtStdDev, rtSkewness: s3, rtCV, sampleCount: n };
+}
+
+/**
+ * Validates the client's per-frame cursor commitments against the server's
+ * record of what it sent when. Returns null if the acks are consistent with
+ * a real, live-rendering client. Returns a string reason if any hard-flag
+ * condition is met.
+ *
+ * This is the core defense against pre-computed cursor traces: a bot that
+ * generates `points` offline cannot simultaneously satisfy (a) latency
+ * variance matching network jitter, (b) per-frame proximity to the real
+ * ball positions, and (c) integrity between the ack commitments and the
+ * main cursor trace.
+ */
+export function analyzeFrameAcks(
+  frameAcks: FrameAck[],
+  frames: BallFrame[],
+  dispatchTimes: number[],
+  cursorPoints: CursorPoint[],
+): string | null {
+  if (frames.length === 0) return 'missing_acks';
+
+  // 1. Coverage: at least 90% of frames must be acked
+  if (frameAcks.length < 0.9 * frames.length) {
+    return 'missing_acks';
+  }
+
+  // 2. Monotonic indices
+  for (let k = 1; k < frameAcks.length; k++) {
+    if (frameAcks[k].i <= frameAcks[k - 1].i) {
+      return 'non_monotonic_acks';
+    }
+  }
+
+  // 3. Bounds check: all indices must refer to real frames
+  for (const a of frameAcks) {
+    if (a.i < 0 || a.i >= frames.length || a.i >= dispatchTimes.length) {
+      return 'non_monotonic_acks';
+    }
+  }
+
+  // 4. Clock alignment via median offset
+  const offsets: number[] = [];
+  for (const a of frameAcks) {
+    offsets.push(a.t - dispatchTimes[a.i]);
+  }
+  offsets.sort((p, q) => p - q);
+  const medianOffset = offsets[Math.floor(offsets.length / 2)];
+
+  // 5. Latency sanity after alignment
+  const latencies: number[] = [];
+  for (const a of frameAcks) {
+    latencies.push(a.t - dispatchTimes[a.i] - medianOffset);
+  }
+  const meanLat = latencies.reduce((s, v) => s + v, 0) / latencies.length;
+  const latVar = latencies.reduce((s, v) => s + (v - meanLat) ** 2, 0) / latencies.length;
+  const latStd = Math.sqrt(latVar);
+
+  // Absolute latency must be plausible (post-alignment: in range around 0)
+  if (meanLat > 500 || meanLat < -500) {
+    return 'bad_latency';
+  }
+
+  // Zero variance (< 0.5ms stddev) is a replay signature
+  if (latStd < 0.5) {
+    return 'constant_latency';
+  }
+
+  // 6. Per-ack proximity to ball
+  let farCount = 0;
+  for (const a of frameAcks) {
+    const frame = frames[a.i];
+    const d = Math.sqrt((a.x - frame.x) ** 2 + (a.y - frame.y) ** 2);
+    if (d > 90) farCount++;
+  }
+  if (farCount > 0.2 * frameAcks.length) {
+    return 'ack_far_from_ball';
+  }
+
+  // 7. Integrity cross-check: committed (x,y) must match interpolated cursor
+  // from points array at the same client-clock timestamp
+  let mismatchCount = 0;
+  for (const a of frameAcks) {
+    const cursor = interpolateCursor(cursorPoints, a.t);
+    if (!cursor) continue;
+    const d = Math.sqrt((cursor.x - a.x) ** 2 + (cursor.y - a.y) ** 2);
+    if (d > 5) mismatchCount++;
+  }
+  if (mismatchCount > 0.1 * frameAcks.length) {
+    return 'ack_points_mismatch';
+  }
+
+  return null;
 }

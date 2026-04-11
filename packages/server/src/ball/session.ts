@@ -1,7 +1,7 @@
 import { createHmac, randomBytes } from 'crypto';
 import type { BallVisuals, BallShape, CursorPoint, BallVerifyResult, ClientEnvironment, RequestMeta, FrameAck } from '../types';
 import { BallPhysics } from './physics';
-import { analyzeBallTracking, analyzeSpeedAtDirectionChanges, analyzeReactionTimes } from './analyze';
+import { analyzeBallTracking, analyzeSpeedAtDirectionChanges, analyzeReactionTimes, analyzeFrameAcks } from './analyze';
 import { computeBallScore } from './scoring';
 import { renderBallFrame } from './renderer';
 
@@ -148,9 +148,6 @@ export class BallChallengeManager {
     clientEnv?: ClientEnvironment,
     requestMeta?: RequestMeta,
   ): BallVerifyResult {
-    // frameAcks will be validated in analyzeBallTracking (Task W1D-4)
-    void frameAcks;
-
     const session = this.sessions.get(sessionId);
     if (!session) {
       return { success: false, score: 0, verdict: 'bot', token: '' };
@@ -174,9 +171,16 @@ export class BallChallengeManager {
     const ballMetrics = analyzeBallTracking(cursorPoints, frames, changeEvents, cursorStartT);
     const speedProfile = analyzeSpeedAtDirectionChanges(cursorPoints, changeEvents, cursorStartT);
     const reactionTime = analyzeReactionTimes(cursorPoints, changeEvents, cursorStartT);
+    const frameAckFlag = analyzeFrameAcks(
+      frameAcks,
+      frames,
+      session.physics.frameDispatchTimes,
+      cursorPoints,
+    );
     const { score, verdict } = computeBallScore(
       cursorPoints, ballMetrics, speedProfile, reactionTime, clientEnv, requestMeta,
       session.physics.directionChangeCount,
+      frameAckFlag,
     );
 
     // Create signed token
