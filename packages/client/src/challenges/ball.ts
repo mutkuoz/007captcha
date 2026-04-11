@@ -259,14 +259,31 @@ export class BallChallenge implements ChallengeInstance {
   private onPointerMove(e: PointerEvent): void {
     if (!this.tracking || !this.challengeCtx) return;
     const rect = this.challengeCtx.canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    this.lastCursor = { x, y };
-    this.points.push({
-      x,
-      y,
-      t: performance.now(),
-      pressure: e.pressure,
-    });
+
+    // Expand coalesced pointermove events for higher-resolution capture.
+    // Browsers batch multiple hardware pointer updates into a single dispatch
+    // — only the latest is `e`, the rest live in getCoalescedEvents(). Using
+    // them can 2-3x the point density for fast-moving cursors. PointerEvent
+    // timeStamps are DOMHighResTimeStamp (same origin as performance.now()),
+    // so no time-base translation is needed.
+    const coalesced = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : null;
+    const events: PointerEvent[] = coalesced && coalesced.length > 0 ? coalesced : [e];
+
+    let lastT = this.points.length > 0 ? this.points[this.points.length - 1].t : -Infinity;
+
+    for (const ev of events) {
+      // Server's isTimestampBotFlag requires strictly-increasing timestamps.
+      // If the browser reports duplicate timeStamps for coalesced events
+      // (rare but possible), skip rather than nudge to avoid creating
+      // resolution-locked intervals that could trip the 80% duplicate check.
+      const t = ev.timeStamp;
+      if (t <= lastT) continue;
+
+      const x = ev.clientX - rect.left;
+      const y = ev.clientY - rect.top;
+      this.lastCursor = { x, y };
+      this.points.push({ x, y, t, pressure: ev.pressure });
+      lastT = t;
+    }
   }
 }
