@@ -10,7 +10,6 @@ export function OOSevenCaptcha({
   className,
   siteKey,
   serverUrl,
-  method,
   theme,
   timeLimit,
   onSuccess,
@@ -27,7 +26,6 @@ export function OOSevenCaptcha({
       siteKey,
       container: containerRef.current,
       serverUrl,
-      method,
       theme,
       timeLimit,
       onSuccess,
@@ -40,7 +38,7 @@ export function OOSevenCaptcha({
       widget.destroy();
       widgetRef.current = null;
     };
-  }, [siteKey, serverUrl, method, theme, timeLimit]);
+  }, [siteKey, serverUrl, theme, timeLimit]);
 
   return <div ref={containerRef} className={className} />;
 }
