@@ -1,11 +1,9 @@
 import type { CaptchaConfig } from './types';
 import type { ChallengeInstance } from './challenge';
-import { createChallenge } from './challenges';
+import { BallChallenge } from './challenges/ball';
 import { STYLES } from './styles';
 
 type WidgetState = 'ready' | 'drawing' | 'analyzing' | 'success' | 'fail';
-
-const MAX_MAZE_REGENERATIONS = 3;
 
 function generateId(): string {
   const arr = new Uint8Array(16);
@@ -22,7 +20,6 @@ export class CaptchaWidget {
   private challenge!: ChallengeInstance;
   private timerInterval: ReturnType<typeof setInterval> | null = null;
   private timeLeft = 0;
-  private regenerationCount = 0;
 
   // DOM refs
   private root!: HTMLDivElement;
@@ -177,18 +174,15 @@ export class CaptchaWidget {
   }
 
   private startChallenge(): void {
-    const method = this.config.method ?? 'random';
-    this.challenge = createChallenge(method, {
-      serverUrl: this.config.serverUrl,
-      siteKey: this.config.siteKey,
-    });
+    this.challenge = new BallChallenge(
+      this.config.serverUrl ?? '',
+      this.config.siteKey,
+    );
     this.challengeId = generateId();
     this.state = 'drawing';
-    this.regenerationCount = 0;
 
     this.titleEl.textContent = this.challenge.getTitle();
 
-    // Show/hide Done button based on challenge type
     this.doneBtn.style.display = this.challenge.showDoneButton ? '' : 'none';
     this.doneBtn.disabled = !this.challenge.showDoneButton;
 
@@ -197,7 +191,6 @@ export class CaptchaWidget {
 
     const strokeColor = getComputedStyle(this.host).getPropertyValue('--captcha-stroke').trim() || '#374151';
 
-    // Start the challenge
     this.challenge.start({
       canvas: this.canvas,
       ctx: this.canvas.getContext('2d')!,
@@ -206,7 +199,6 @@ export class CaptchaWidget {
       onComplete: () => this.finishChallenge(),
     });
 
-    // Start timer
     const tl = this.challenge.timeLimit ?? this.config.timeLimit;
     this.timeLeft = tl;
     this.updateTimer(tl);
@@ -235,41 +227,6 @@ export class CaptchaWidget {
   }
 
   private handleTimeout(): void {
-    // For maze challenges, regenerate instead of failing (up to MAX_MAZE_REGENERATIONS)
-    if (this.challenge.getMethod() === 'maze' && this.regenerationCount < MAX_MAZE_REGENERATIONS) {
-      this.regenerationCount++;
-      if (this.timerInterval) {
-        clearInterval(this.timerInterval);
-        this.timerInterval = null;
-      }
-
-      // Reset and regenerate
-      this.challenge.reset();
-      this.setupCanvas(); // reset canvas scaling
-      const strokeColor = getComputedStyle(this.host).getPropertyValue('--captcha-stroke').trim() || '#374151';
-      this.challenge.start({
-        canvas: this.canvas,
-        ctx: this.canvas.getContext('2d')!,
-        instructionEl: this.instructionEl,
-        strokeColor,
-        onComplete: () => this.finishChallenge(),
-      });
-
-      // Restart timer
-      const tl = this.challenge.timeLimit ?? this.config.timeLimit;
-      this.timeLeft = tl;
-      this.updateTimer(tl);
-      this.timerInterval = setInterval(() => {
-        this.timeLeft -= 100;
-        this.updateTimer(tl);
-        if (this.timeLeft <= 0) {
-          this.handleTimeout();
-        }
-      }, 100);
-      return;
-    }
-
-    // Otherwise finish (time ran out)
     this.finishChallenge();
   }
 
