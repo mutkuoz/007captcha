@@ -1,16 +1,10 @@
 export { CaptchaWidget } from './widget';
-export { analyzeDrawing } from './analyze';
 export type {
   CaptchaConfig,
   CapturePoint,
   ChallengeMethod,
-  ShapeType,
   AnalysisResult,
   BehavioralMetrics,
-  ShapePerfectionMetrics,
-  MazeDefinition,
-  MazeCell,
-  MazeAnalysisMetrics,
   BallShape,
   BallFrame,
   BallVisuals,
