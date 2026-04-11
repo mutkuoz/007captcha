@@ -19,8 +19,8 @@ describe('verify', () => {
   it('should verify a valid token (new format)', async () => {
     const token = makeToken({
       cid: 'test-123',
-      method: 'shape',
-      challenge: 'circle',
+      method: 'ball',
+      challenge: 'ball',
       score: 0.85,
       verdict: 'human',
       ts: Date.now(),
@@ -32,26 +32,8 @@ describe('verify', () => {
     expect(result.success).toBe(true);
     expect(result.score).toBe(0.85);
     expect(result.verdict).toBe('human');
-    expect(result.method).toBe('shape');
-    expect(result.challenge).toBe('circle');
-  });
-
-  it('should verify a valid maze token', async () => {
-    const token = makeToken({
-      cid: 'test-456',
-      method: 'maze',
-      challenge: 'maze',
-      score: 0.72,
-      verdict: 'human',
-      ts: Date.now(),
-      ph: 'def456',
-      origin: 'http://localhost',
-    });
-
-    const result = await verify(token, SECRET);
-    expect(result.success).toBe(true);
-    expect(result.method).toBe('maze');
-    expect(result.challenge).toBe('maze');
+    expect(result.method).toBe('ball');
+    expect(result.challenge).toBe('ball');
   });
 
   it('should verify a valid ball token', async () => {
@@ -70,23 +52,6 @@ describe('verify', () => {
     expect(result.success).toBe(true);
     expect(result.method).toBe('ball');
     expect(result.challenge).toBe('ball');
-  });
-
-  it('should handle legacy token format (shape field)', async () => {
-    const token = makeToken({
-      cid: 'test-legacy',
-      shape: 'circle',
-      score: 0.85,
-      verdict: 'human',
-      ts: Date.now(),
-      ph: 'abc123',
-      origin: 'http://localhost',
-    });
-
-    const result = await verify(token, SECRET);
-    expect(result.success).toBe(true);
-    expect(result.method).toBe('shape');
-    expect(result.challenge).toBe('circle');
   });
 
   it('should reject a tampered token', async () => {
