@@ -1,5 +1,5 @@
 import { createHmac, randomBytes } from 'crypto';
-import type { BallVisuals, BallShape, CursorPoint, BallVerifyResult, ClientEnvironment, RequestMeta, FrameAck } from '../types';
+import type { BallVisuals, BallShape, BallFrame, CursorPoint, BallVerifyResult, ClientEnvironment, RequestMeta, FrameAck } from '../types';
 import { BallPhysics } from './physics';
 import { analyzeBallTracking, analyzeSpeedAtDirectionChanges, analyzeReactionTimes, analyzeFrameAcks } from './analyze';
 import { computeBallScore } from './scoring';
@@ -32,6 +32,13 @@ export interface BallSession {
   status: SessionStatus;
   visuals: BallVisuals;
   physics: BallPhysics;
+  /**
+   * Frames actually dispatched to the client over SSE (every 3rd physics tick).
+   * Client frameAck indices reference this array, NOT physics.frames.
+   */
+  sentFrames: BallFrame[];
+  /** Date.now() at the moment of each SSE write, parallel to sentFrames. */
+  sentDispatchTimes: number[];
   createdAt: number;
   streamStartedAt: number | null;
 }
@@ -77,6 +84,8 @@ export class BallChallengeManager {
       status: 'pending',
       visuals,
       physics: new BallPhysics(this.durationMs),
+      sentFrames: [],
+      sentDispatchTimes: [],
       createdAt: Date.now(),
       streamStartedAt: null,
     };
@@ -113,6 +122,12 @@ export class BallChallengeManager {
         frameCount++;
         // Send every 3rd frame (~20fps) to keep bandwidth reasonable
         if (frameCount % 3 !== 0) return;
+
+        // Record the frame as actually dispatched to the client — this is what
+        // the client's frameAck indices reference, and the ground truth used
+        // by analyzeFrameAcks. NOT the full 60fps physics tick stream.
+        session.sentFrames.push(frame);
+        session.sentDispatchTimes.push(Date.now());
 
         const png = renderBallFrame(
           frame.x, frame.y,
@@ -172,10 +187,12 @@ export class BallChallengeManager {
     const ballMetrics = analyzeBallTracking(cursorPoints, frames, changeEvents, cursorStartT);
     const speedProfile = analyzeSpeedAtDirectionChanges(cursorPoints, changeEvents, cursorStartT);
     const reactionTime = analyzeReactionTimes(cursorPoints, changeEvents, cursorStartT);
+    // Validate frameAcks against the frames actually sent over SSE — NOT
+    // physics.frames (which includes the 2/3 of ticks that are never dispatched).
     const frameAckFlag = analyzeFrameAcks(
       frameAcks,
-      frames,
-      session.physics.frameDispatchTimes,
+      session.sentFrames,
+      session.sentDispatchTimes,
       cursorPoints,
     );
     const { score, verdict } = computeBallScore(
@@ -195,7 +212,9 @@ export class BallChallengeManager {
             ? process.env.LABEL
             : 'human',
         points: cursorPoints.map((p) => ({ x: p.x, y: p.y, t: p.t })),
-        ballFrames: frames.map((f, i) => ({ i, x: f.x, y: f.y, t: f.t })),
+        // Log only the frames actually dispatched to the client — this is what
+        // the client saw and what its frameAcks reference.
+        ballFrames: session.sentFrames.map((f, i) => ({ i, x: f.x, y: f.y, t: f.t })),
         frameAcks,
         clientEnv: clientEnv ?? {},
         requestMeta: requestMeta ?? {},
