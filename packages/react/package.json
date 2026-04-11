@@ -1,6 +1,6 @@
 {
   "name": "@007captcha/react",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "007captcha React component wrapper",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -19,7 +19,7 @@
     "build": "tsup src/index.ts --format esm,cjs --dts --clean --external react --external @007captcha/client"
   },
   "peerDependencies": {
-    "@007captcha/client": ">=0.1.0",
+    "@007captcha/client": ">=0.2.0",
     "react": ">=18.0.0"
   },
   "devDependencies": {

@@ -1,6 +1,6 @@
 {
   "name": "@007captcha/server",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "007captcha server-side token verification",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",

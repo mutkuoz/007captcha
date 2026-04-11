@@ -1,6 +1,6 @@
 {
   "name": "@007captcha/client",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "007captcha client-side widget and shape analysis engine",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
