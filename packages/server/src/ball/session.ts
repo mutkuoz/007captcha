@@ -4,6 +4,7 @@ import { BallPhysics } from './physics';
 import { analyzeBallTracking, analyzeSpeedAtDirectionChanges, analyzeReactionTimes, analyzeFrameAcks } from './analyze';
 import { computeBallScore } from './scoring';
 import { renderBallFrame } from './renderer';
+import { logTrace } from '../logger';
 
 const BALL_SHAPES: BallShape[] = ['circle', 'square', 'triangle', 'diamond'];
 
@@ -182,6 +183,29 @@ export class BallChallengeManager {
       session.physics.directionChangeCount,
       frameAckFlag,
     );
+
+    // Optional: log the trace for offline ML training (opt-in via env vars)
+    try {
+      logTrace({
+        v: 1,
+        sessionId,
+        ts: Date.now(),
+        label:
+          process.env.LABEL === 'bot' || process.env.LABEL === 'human'
+            ? process.env.LABEL
+            : 'human',
+        points: cursorPoints.map((p) => ({ x: p.x, y: p.y, t: p.t })),
+        ballFrames: frames.map((f, i) => ({ i, x: f.x, y: f.y, t: f.t })),
+        frameAcks,
+        clientEnv: clientEnv ?? {},
+        requestMeta: requestMeta ?? {},
+        verdictAtCapture: verdict,
+        scoreAtCapture: score,
+        signals: { ballMetrics, speedProfile, reactionTime, frameAckFlag },
+      });
+    } catch {
+      // Never break verification because of logging
+    }
 
     // Create signed token
     const payload = {
