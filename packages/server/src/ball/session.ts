@@ -1,5 +1,5 @@
 import { createHmac, randomBytes } from 'crypto';
-import type { BallVisuals, BallShape, CursorPoint, BallVerifyResult, ClientEnvironment, RequestMeta } from '../types';
+import type { BallVisuals, BallShape, CursorPoint, BallVerifyResult, ClientEnvironment, RequestMeta, FrameAck } from '../types';
 import { BallPhysics } from './physics';
 import { analyzeBallTracking, analyzeSpeedAtDirectionChanges, analyzeReactionTimes } from './analyze';
 import { computeBallScore } from './scoring';
@@ -143,10 +143,14 @@ export class BallChallengeManager {
     sessionId: string,
     cursorPoints: CursorPoint[],
     cursorStartT: number,
+    frameAcks: FrameAck[],
     origin: string,
     clientEnv?: ClientEnvironment,
     requestMeta?: RequestMeta,
   ): BallVerifyResult {
+    // frameAcks will be validated in analyzeBallTracking (Task W1D-4)
+    void frameAcks;
+
     const session = this.sessions.get(sessionId);
     if (!session) {
       return { success: false, score: 0, verdict: 'bot', token: '' };

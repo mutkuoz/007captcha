@@ -79,7 +79,7 @@ describe('BallChallengeManager', () => {
       t: i * 16 + 1000,
     }));
 
-    const result = manager.verify(sessionId, cursorPoints, 1000, 'http://localhost');
+    const result = manager.verify(sessionId, cursorPoints, 1000, [], 'http://localhost');
 
     expect(result.token).toBeTruthy();
     expect(result.token.split('.')).toHaveLength(2);
