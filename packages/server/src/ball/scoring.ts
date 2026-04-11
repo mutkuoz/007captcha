@@ -697,48 +697,51 @@ function scoreReactionTime(m?: ReactionTimeMetrics): number {
 }
 
 function scoreBallTracking(m: BallAnalysisMetrics, speedProfile?: SpeedProfileMetrics, reactionTime?: ReactionTimeMetrics): number {
-  // Distance: humans are imprecise — average 30-120px is normal.
-  // Only penalize very tight (bot-like) or very far (not following).
+  // Distance (Fix 3: tightened band)
+  // Hard flags for <10px and >0.9 coverage are handled upstream in computeBallScore.
   let distanceScore: number;
-  if (m.averageDistance < 5) distanceScore = 0.1;       // suspiciously accurate
-  else if (m.averageDistance < 15) distanceScore = 0.6;  // maybe bot, maybe skilled
-  else if (m.averageDistance <= 140) distanceScore = 1.0; // human range
-  else if (m.averageDistance <= 220) distanceScore = 0.5; // poor tracking but trying
-  else distanceScore = 0.0;                               // not following
+  if (m.averageDistance < 10) distanceScore = 0.2;
+  else if (m.averageDistance < 15) distanceScore = 0.6;
+  else if (m.averageDistance <= 80) distanceScore = 1.0;
+  else if (m.averageDistance <= 100) distanceScore = normalize(100 - m.averageDistance, 0, 20);
+  else distanceScore = 0.0;
 
-  // Distance variation: humans have variable distance, bots are steady
+  // Distance variation unchanged
   const distVariationScore = normalize(m.distanceStdDev, 3, 25);
 
-  // Lag: humans react in 100-500ms. With 20fps frames there's inherent display lag.
+  // Lag unchanged
   let lagScore: number;
-  if (m.estimatedLag < 20) lagScore = 0.0;        // bot — reacting before seeing
-  else if (m.estimatedLag < 60) lagScore = 0.4;   // suspicious
-  else if (m.estimatedLag <= 600) lagScore = 1.0;  // human range (wide)
-  else lagScore = 0.4;                              // very delayed but still moving
+  if (m.estimatedLag < 20) lagScore = 0.0;
+  else if (m.estimatedLag < 60) lagScore = 0.4;
+  else if (m.estimatedLag <= 600) lagScore = 1.0;
+  else lagScore = 0.4;
 
   const lagConsistencyScore = normalize(m.lagConsistency, 5, 60);
   const overshootScore = normalize(m.overshootCount, 0, 4);
 
-  // Coverage: fraction of time within tracking range (150px).
-  // Humans casually following will be within range most of the time.
+  // Coverage (Fix 3: tightened, but hard flag upstream catches the extreme cases)
   let coverageScore: number;
-  if (m.trackingCoverage < 0.15) coverageScore = 0.0;  // not following at all
+  if (m.trackingCoverage < 0.15) coverageScore = 0.0;
   else if (m.trackingCoverage < 0.3) coverageScore = 0.4;
-  else if (m.trackingCoverage <= 0.97) coverageScore = 1.0;
-  else coverageScore = 0.4; // suspiciously perfect
+  else if (m.trackingCoverage <= 0.9) coverageScore = 1.0;
+  else coverageScore = 0.5;
+
+  // Fix 1: frame-within-tight fold-in (20% of ball score)
+  const tightnessScore = normalize(m.frameWithinTight, 0.55, 0.85);
 
   const spScore = scoreSpeedProfile(speedProfile);
   const rtScore = scoreReactionTime(reactionTime);
 
   return (
-    distanceScore * 0.15 +
-    distVariationScore * 0.12 +
-    lagScore * 0.15 +
-    lagConsistencyScore * 0.12 +
+    distanceScore * 0.10 +
+    distVariationScore * 0.10 +
+    lagScore * 0.12 +
+    lagConsistencyScore * 0.10 +
     overshootScore * 0.08 +
-    coverageScore * 0.15 +
-    spScore * 0.10 +
-    rtScore * 0.13
+    coverageScore * 0.12 +
+    tightnessScore * 0.20 +
+    spScore * 0.08 +
+    rtScore * 0.10
   );
 }
 
@@ -768,6 +771,22 @@ export function computeBallScore(
 
   const spectral = analyzeTimingSpectrum(cursorPoints);
   if (isSpectralBotFlag(spectral)) return { score: 0, verdict: 'bot' };
+
+  // Fix 1 — frame-level tracking enforcement
+  if (ballMetrics.frameWithinTight < 0.55) {
+    return { score: 0, verdict: 'bot' };
+  }
+  if (ballMetrics.frameWithinTight > 0.95 && ballMetrics.averageDistance < 12) {
+    return { score: 0, verdict: 'bot' };
+  }
+
+  // Fix 3 — too-tight hard flag
+  if (ballMetrics.averageDistance < 10 && ballMetrics.distanceStdDev < 3) {
+    return { score: 0, verdict: 'bot' };
+  }
+  if (ballMetrics.trackingCoverage > 0.9 && ballMetrics.averageDistance < 20) {
+    return { score: 0, verdict: 'bot' };
+  }
 
   // Compute all behavioral signals
   const jerk = analyzeJerk(cursorPoints);
