@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from 'crypto';
-import type { TokenPayload, VerifyResult, ChallengeMethod } from './types';
+import type { TokenPayload, VerifyResult } from './types';
 
 function base64urlDecode(str: string): Buffer {
   let padded = str.replace(/-/g, '+').replace(/_/g, '/');
@@ -17,7 +17,7 @@ export async function verify(token: string, secretKey: string): Promise<VerifyRe
   const fail = (error: string): VerifyResult => ({
     success: false,
     score: 0,
-    method: 'shape',
+    method: 'ball',
     challenge: '',
     verdict: 'bot',
     timestamp: 0,
@@ -58,15 +58,11 @@ export async function verify(token: string, secretKey: string): Promise<VerifyRe
     return fail('Token expired');
   }
 
-  // Backward compat: old tokens have 'shape' but no 'method'
-  const method: ChallengeMethod = payload.method ?? 'shape';
-  const challenge: string = payload.challenge ?? (payload.shape as string) ?? '';
-
   return {
     success: payload.verdict !== 'bot',
     score: payload.score,
-    method,
-    challenge,
+    method: 'ball',
+    challenge: payload.challenge ?? '',
     verdict: payload.verdict,
     timestamp: payload.ts,
   };
