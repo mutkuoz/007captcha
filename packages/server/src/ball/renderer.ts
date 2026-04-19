@@ -1,10 +1,15 @@
 import { deflateSync } from 'zlib';
 import type { BallShape } from '../types';
+import type { DecoySnapshot } from './physics';
 
 // Render at half resolution — client scales to 480x400
 const RENDER_W = 240;
 const RENDER_H = 200;
 const BALL_RADIUS = 10; // half of display radius (20px at full res)
+const DECOY_RADIUS = 5; // half of ball radius — small enough that humans
+                        // perceive decoys as dots, large enough that a
+                        // naive all-non-bg-pixel centroid extractor is
+                        // materially biased away from the real ball.
 
 // ── CRC32 for PNG chunks ──
 
@@ -182,9 +187,14 @@ function drawShape(
 // ── Public API ──
 
 /**
- * Render a ball frame to a PNG buffer at half resolution (200x170).
- * The client scales to full canvas size (400x340).
+ * Render a ball frame to a PNG buffer at half resolution (240x200).
+ * The client scales to full canvas size (480x400).
  * No external dependencies — uses only Node.js built-in zlib.
+ *
+ * Decoys are drawn in the ball colour as small filled circles so that a
+ * naive "background subtraction + centroid-of-non-bg-pixels" attack picks
+ * up decoy pixels too, pulling the estimated position away from the real
+ * ball. Humans identify the ball by size + motion coherence.
  */
 export function renderBallFrame(
   ballX: number,
@@ -192,6 +202,7 @@ export function renderBallFrame(
   bgColor: string,
   ballColor: string,
   ballShape: BallShape,
+  decoys: readonly DecoySnapshot[] = [],
 ): Buffer {
   const pixels = new Uint8Array(RENDER_W * RENDER_H * 3);
   const [bgR, bgG, bgB] = parseHex(bgColor);
@@ -202,9 +213,24 @@ export function renderBallFrame(
     pixels[i] = bgR; pixels[i + 1] = bgG; pixels[i + 2] = bgB;
   }
 
+  const scaleX = RENDER_W / 480;
+  const scaleY = RENDER_H / 400;
+
+  // Decoys drawn first so the ball's shadow/body overlay them when they
+  // happen to land in the same spot.
+  for (const d of decoys) {
+    const dx = d.x * scaleX;
+    const dy = d.y * scaleY;
+    const sdR = Math.max(0, bgR - 30);
+    const sdG = Math.max(0, bgG - 30);
+    const sdB = Math.max(0, bgB - 30);
+    drawFilledCircle(pixels, RENDER_W, RENDER_H, dx + 1, dy + 1, DECOY_RADIUS, sdR, sdG, sdB);
+    drawFilledCircle(pixels, RENDER_W, RENDER_H, dx, dy, DECOY_RADIUS, bR, bG, bB);
+  }
+
   // Scale coordinates to render resolution
-  const rx = ballX * (RENDER_W / 480);
-  const ry = ballY * (RENDER_H / 400);
+  const rx = ballX * scaleX;
+  const ry = ballY * scaleY;
 
   // Shadow (offset, darker)
   const sR = Math.max(0, bgR - 40);

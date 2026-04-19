@@ -17,7 +17,7 @@
 
 Handles everything security-sensitive: challenge generation, multi-layered behavioral analysis, scoring, environment fingerprinting, and HMAC-SHA256 token signing. The client widget acts as a thin rendering layer &mdash; all verification logic runs here.
 
-Scoring evaluates 12+ independent signals per challenge including spectral timing analysis, velocity-curvature power law fitting, jerk profiling, sub-movement segmentation, drift detection, Fitts's Law validation, reaction time modeling, and environment fingerprinting. Hard bot flags (timer-locked intervals, non-monotonic timestamps, `navigator.webdriver`, impossible power law fits) trigger immediate bot verdicts.
+Scoring evaluates 14 independent signals per challenge including spectral timing analysis, velocity-curvature power-law fitting, interval-regularity coefficient-of-variation, locally-detrended residual-noise analysis, jerk profiling, sub-movement segmentation, drift/bias detection, reaction time distribution modeling, and environment fingerprinting. Eleven hard bot flags trigger immediate bot verdicts &mdash; including textbook 1/3 power-law fits (bot signature on this task), mechanical inter-event timing with zero saccade pauses, near-zero residual noise after detrending, inhumanly narrow cursor-to-ball distance distributions, and aggregate multi-signal suspicion.
 
 **Zero runtime dependencies.** Uses only Node.js built-in `crypto`.
 

@@ -134,6 +134,7 @@ export class BallChallengeManager {
           session.visuals.bgColor,
           session.visuals.ballColor,
           session.visuals.ballShape,
+          session.physics.decoys,
         );
         onFrame({ img: png.toString('base64'), t: frame.t });
       },

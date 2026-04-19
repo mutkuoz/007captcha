@@ -13,6 +13,28 @@ const BOUNCE_DAMPEN = 0.85;
 const COLOR_CHANGE_MIN_MS = 800;
 const COLOR_CHANGE_MAX_MS = 3000;
 
+// Decoys: small ball-colored shapes that move independently alongside the
+// main ball. Present primarily to defeat naive centroid-extraction attacks
+// (corner-based background subtraction + all-non-bg-pixels averaging).
+// Humans lock onto the large coherent moving ball visually; naive color
+// averaging picks up decoys too, biasing the attacker's tracked position.
+const NUM_DECOYS = 4;
+const DECOY_MIN_SPEED = 12;
+const DECOY_MAX_SPEED = 38;
+const DECOY_MIN_DIST_FROM_BALL = 70; // spawn away from the ball start
+
+export interface DecoySnapshot {
+  /** Centre x at display resolution (480×400 coords). */
+  x: number;
+  /** Centre y at display resolution. */
+  y: number;
+}
+
+interface DecoyState extends DecoySnapshot {
+  vx: number;
+  vy: number;
+}
+
 function randomInRange(min: number, max: number): number {
   return min + Math.random() * (max - min);
 }
@@ -66,6 +88,9 @@ export class BallPhysics {
   readonly startX: number;
   readonly startY: number;
 
+  /** Decoy shapes drawn same-color-as-ball. Positions update every tick. */
+  private readonly decoyStates: DecoyState[] = [];
+
   private onFrame: ((frame: BallFrame) => void) | null = null;
   private onEnd: (() => void) | null = null;
   private onColorChange: ((t: number) => void) | null = null;
@@ -85,6 +110,33 @@ export class BallPhysics {
 
     this.nextChangeAt = randomInRange(CHANGE_MIN_MS, CHANGE_MAX_MS);
     this.nextColorChangeAt = randomInRange(COLOR_CHANGE_MIN_MS, COLOR_CHANGE_MAX_MS);
+
+    // Initialise decoys at random canvas positions, ensuring separation from
+    // the ball so the initial frame doesn't look like a pile. Velocities
+    // stay slower than the ball's min speed so the moving ball is
+    // visually distinct.
+    for (let i = 0; i < NUM_DECOYS; i++) {
+      let dx = 0, dy = 0;
+      for (let tries = 0; tries < 10; tries++) {
+        dx = randomInRange(PADDING + 10, CANVAS_W - PADDING - 10);
+        dy = randomInRange(PADDING + 10, CANVAS_H - PADDING - 10);
+        const sep = Math.hypot(dx - this.x, dy - this.y);
+        if (sep > DECOY_MIN_DIST_FROM_BALL) break;
+      }
+      const dAngle = Math.random() * Math.PI * 2;
+      const dSpeed = randomInRange(DECOY_MIN_SPEED, DECOY_MAX_SPEED);
+      this.decoyStates.push({
+        x: dx,
+        y: dy,
+        vx: Math.cos(dAngle) * dSpeed,
+        vy: Math.sin(dAngle) * dSpeed,
+      });
+    }
+  }
+
+  /** Current decoy positions at display (480×400) resolution. */
+  get decoys(): DecoySnapshot[] {
+    return this.decoyStates.map((d) => ({ x: d.x, y: d.y }));
   }
 
   /** Start the real-time simulation. Calls onFrame for each tick, onEnd when done. */
@@ -107,6 +159,34 @@ export class BallPhysics {
     }
   }
 
+  /** Advance decoy positions by one frame interval. Walls bounce; occasional
+   * random kicks keep the path from being straight-line predictable.
+   */
+  private tickDecoys(): void {
+    const dt = FRAME_INTERVAL / 1000;
+    for (const d of this.decoyStates) {
+      d.x += d.vx * dt;
+      d.y += d.vy * dt;
+      if (d.x < PADDING) { d.x = PADDING; d.vx = Math.abs(d.vx); }
+      else if (d.x > CANVAS_W - PADDING) { d.x = CANVAS_W - PADDING; d.vx = -Math.abs(d.vx); }
+      if (d.y < PADDING) { d.y = PADDING; d.vy = Math.abs(d.vy); }
+      else if (d.y > CANVAS_H - PADDING) { d.y = CANVAS_H - PADDING; d.vy = -Math.abs(d.vy); }
+      if (Math.random() < 0.015) {
+        d.vx += randomInRange(-12, 12);
+        d.vy += randomInRange(-12, 12);
+        const s = Math.hypot(d.vx, d.vy);
+        if (s > DECOY_MAX_SPEED) {
+          d.vx *= DECOY_MAX_SPEED / s;
+          d.vy *= DECOY_MAX_SPEED / s;
+        } else if (s < DECOY_MIN_SPEED) {
+          const k = DECOY_MIN_SPEED / (s || 1);
+          d.vx *= k;
+          d.vy *= k;
+        }
+      }
+    }
+  }
+
   /** Compute one step. This is where randomness happens — future is unknowable. */
   private tick(): void {
     if (this.t > this.durationMs) {
@@ -114,6 +194,8 @@ export class BallPhysics {
       this.onEnd?.();
       return;
     }
+
+    this.tickDecoys();
 
     // Direction change?
     if (this.t >= this.nextChangeAt) {

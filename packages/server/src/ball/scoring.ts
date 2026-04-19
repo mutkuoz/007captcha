@@ -105,9 +105,16 @@ export function isPowerLawBotFlag(m: PowerLawMetrics): boolean {
   // Need sufficient samples for a reliable determination
   if (m.sampleCount < 20) return false;
 
-  // Constant velocity regardless of curvature — classic bot signature.
-  // Human β is ~0.33; a value near 0 means speed doesn't vary with path curvature.
-  if (Math.abs(m.beta) < 0.03 && m.rSquared > 0.3) return true;
+  // Calibrated 2026-04-19 from 7 human traces (β 0.64-1.06, R² 0.19-0.46) and
+  // 20 bot traces (β 0.19-0.35, R² 0.07-0.32). Bots mimic the literature
+  // "1/3 power law" because it's the textbook value — but on this
+  // ball-tracking task real humans operate at a much larger β. A power-law
+  // fit landing near 1/3 is the bot signature here.
+  //
+  // R² threshold 0.05 chosen to catch noisy adaptive bots whose R² drops
+  // below 0.10 after heavy noise injection — human floor is 0.19, so this
+  // leaves a ~3.8× safety margin.
+  if (m.beta < 0.40 && m.rSquared > 0.05) return true;
 
   // Impossibly perfect power law adherence — bot explicitly mimicking the law.
   // Even skilled humans produce noisy data with R² rarely above 0.90.
@@ -126,14 +133,19 @@ function scorePowerLaw(m: PowerLawMetrics): number {
   // Insufficient data — return neutral score
   if (m.sampleCount < 15) return 0.5;
 
-  // Score based on how close β is to the expected 1/3
-  const betaDeviation = Math.abs(m.beta - 1 / 3);
-  const betaScore = Math.max(0, 1 - betaDeviation * 4); // 0 at β≈0.58 or β≈0.08
+  // Re-calibrated from real traces (2026-04-19). On this ball-tracking task
+  // humans cluster at β ≈ 0.65-1.10; the "textbook 1/3" value is what bots
+  // produce when injecting gaussian noise on a spring-follower. Flipping the
+  // target range fixes a scoring bug where bots were getting 1.0 and humans 0.
+  let betaScore: number;
+  if (m.beta < 0.40) betaScore = 0.0;          // classic 1/3-law bot
+  else if (m.beta < 0.55) betaScore = 0.3;
+  else if (m.beta <= 1.15) betaScore = 1.0;    // human range
+  else betaScore = 0.5;                         // unusually high but possible
 
-  // R² should be moderate (humans: 0.2-0.85 typically)
   let fitScore: number;
-  if (m.rSquared < 0.1) fitScore = 0.2;       // no relationship at all
-  else if (m.rSquared < 0.2) fitScore = 0.5;
+  if (m.rSquared < 0.05) fitScore = 0.2;       // no power-law relationship
+  else if (m.rSquared < 0.15) fitScore = 0.5;
   else if (m.rSquared <= 0.85) fitScore = 1.0; // human range
   else if (m.rSquared <= 0.93) fitScore = 0.6; // suspiciously good
   else fitScore = 0.2;                          // too perfect
@@ -142,6 +154,190 @@ function scorePowerLaw(m: PowerLawMetrics): number {
   if (m.beta < 0) return Math.max(0, fitScore * 0.2);
 
   return betaScore * 0.6 + fitScore * 0.4;
+}
+
+// --- Interval regularity ---
+// Mechanical timing — events locked to a fixed tick rate with no natural
+// pauses — is the residual signal that both CDP-driven and pure-HTTP bots
+// leak. Real browsers produce highly variable inter-event intervals because
+// pointer events fire on hardware polling + OS scheduling + rendering pacing,
+// all of which add asymmetric noise that no ticker-based bot reproduces.
+
+export interface IntervalRegularityMetrics {
+  intervalCV: number;   // stdDev(intervals) / mean(intervals)
+  pointCount: number;
+  duration: number;     // ms
+  pauseCount: number;   // saccade-like pauses (dt>50ms, d<2px)
+}
+
+export function analyzeIntervalRegularity(points: CursorPoint[]): IntervalRegularityMetrics {
+  if (points.length < 2) {
+    return { intervalCV: 0, pointCount: points.length, duration: 0, pauseCount: 0 };
+  }
+
+  const intervals: number[] = [];
+  let pauseCount = 0;
+  for (let i = 1; i < points.length; i++) {
+    const dt = points[i].t - points[i - 1].t;
+    if (dt > 0) intervals.push(dt);
+    const dx = points[i].x - points[i - 1].x;
+    const dy = points[i].y - points[i - 1].y;
+    if (dt > 50 && Math.sqrt(dx * dx + dy * dy) < 2) pauseCount++;
+  }
+
+  const duration = points[points.length - 1].t - points[0].t;
+  if (intervals.length < 2) {
+    return { intervalCV: 0, pointCount: points.length, duration, pauseCount };
+  }
+
+  const m = intervals.reduce((s, v) => s + v, 0) / intervals.length;
+  const sd = Math.sqrt(
+    intervals.reduce((s, v) => s + (v - m) ** 2, 0) / intervals.length
+  );
+  return {
+    intervalCV: m > 0 ? sd / m : 0,
+    pointCount: points.length,
+    duration,
+    pauseCount,
+  };
+}
+
+/**
+ * Hard-flag a session whose timing is mechanically locked (CV below the
+ * human floor) AND contains no saccade pauses over a long tracking window.
+ *
+ * Calibrated 2026-04-19 from 7 real human traces (CV 1.6–2.2, pauseCount 1–9)
+ * and 20 bot traces (CV 0.13–0.22, pauseCount 0). Humans fall above 0.5 CV
+ * *and* above 0 pauses; no bot trace in the attack corpus satisfies either.
+ *
+ * Both conditions required to trigger — a human could conceivably maintain
+ * steady timing on a gaming mouse OR never pause for 8s, but not both.
+ */
+export function isIntervalRegularityBotFlag(m: IntervalRegularityMetrics): boolean {
+  // Need enough data for CV to be meaningful and the tracking window long
+  // enough that saccade pauses would normally occur.
+  if (m.pointCount < 100 || m.duration < 6000) return false;
+  // Strict: mechanical timing + zero saccades (original attacks).
+  if (m.intervalCV < 0.5 && m.pauseCount === 0) return true;
+  // Looser: near-mechanical timing with token saccade injection. CV < 0.7
+  // is still 2.3× below the human floor (1.61 min across 7 calibration
+  // traces); pauseCount ≤ 1 catches attackers who add only the bare-minimum
+  // fake pauses. Requires pointCount ≥ 200 to avoid flagging short sessions.
+  if (m.pointCount >= 200 && m.intervalCV < 0.7 && m.pauseCount <= 1) return true;
+  return false;
+}
+
+function scoreIntervalRegularity(m: IntervalRegularityMetrics): number {
+  if (m.pointCount < 30) return 0.5;
+
+  // CV scoring calibrated from real traces. Bots sit at 0.13-0.22; humans at 1.6+.
+  let cvScore: number;
+  if (m.intervalCV < 0.3) cvScore = 0.05;
+  else if (m.intervalCV < 0.5) cvScore = 0.2;
+  else if (m.intervalCV < 0.8) cvScore = 0.5;
+  else if (m.intervalCV < 1.2) cvScore = 0.8;
+  else if (m.intervalCV <= 3.0) cvScore = 1.0;
+  else cvScore = 0.7;
+
+  // Pause density scoring. Humans produce ~1 saccade per second of tracking.
+  // Zero pauses across a long window is a strong bot signal.
+  const pausesPerSec = m.duration > 0 ? m.pauseCount / (m.duration / 1000) : 0;
+  let pauseScore: number;
+  if (m.duration < 4000) pauseScore = 0.5;             // too short to expect pauses
+  else if (pausesPerSec === 0) pauseScore = 0.05;
+  else if (pausesPerSec < 0.2) pauseScore = 0.6;
+  else if (pausesPerSec <= 2.0) pauseScore = 1.0;
+  else pauseScore = 0.8;
+
+  return cvScore * 0.6 + pauseScore * 0.4;
+}
+
+// --- Residual noise after local detrending ---
+// The strongest biomechanical signal a human cursor leaks is the unpredictable
+// jitter around the local motion trend. Fit a sliding linear trend (window=10
+// points each side, 21-point fit) at each position and measure the stddev of
+// the residuals. Real humans produce ~3.6-4.8 px/axis; smoothly-interpolated
+// bots (spring follower, gaussian cursor noise) produce 0.8-1.1 px/axis — a
+// 3-4× gap. Insider-style bots with heavy noise injection overlap with humans
+// on THIS signal but fail elsewhere; the two flags together close the gap.
+
+export interface ResidualNoiseMetrics {
+  /** Per-axis mean of the residual stddev across the session. */
+  residualStd: number;
+  sampleCount: number;
+}
+
+export function analyzeResidualNoise(points: CursorPoint[]): ResidualNoiseMetrics {
+  if (points.length < 30) return { residualStd: 0, sampleCount: points.length };
+
+  const ts = points.map(p => p.t);
+  const xs = points.map(p => p.x);
+  const ys = points.map(p => p.y);
+  const W = 10;
+  const rx: number[] = [];
+  const ry: number[] = [];
+
+  for (let i = 0; i < points.length; i++) {
+    const lo = Math.max(0, i - W);
+    const hi = Math.min(points.length, i + W + 1);
+    let sumT = 0, sumX = 0, sumY = 0, sumTX = 0, sumTY = 0, sumT2 = 0;
+    const n = hi - lo;
+    for (let j = lo; j < hi; j++) {
+      sumT += ts[j];
+      sumX += xs[j];
+      sumY += ys[j];
+      sumTX += ts[j] * xs[j];
+      sumTY += ts[j] * ys[j];
+      sumT2 += ts[j] * ts[j];
+    }
+    const denom = n * sumT2 - sumT * sumT;
+    if (Math.abs(denom) < 1e-6) {
+      rx.push(0);
+      ry.push(0);
+      continue;
+    }
+    const mx = (n * sumTX - sumT * sumX) / denom;
+    const bx = (sumX - mx * sumT) / n;
+    const my = (n * sumTY - sumT * sumY) / denom;
+    const by = (sumY - my * sumT) / n;
+    rx.push(xs[i] - (mx * ts[i] + bx));
+    ry.push(ys[i] - (my * ts[i] + by));
+  }
+
+  const meanX = rx.reduce((s, v) => s + v, 0) / rx.length;
+  const meanY = ry.reduce((s, v) => s + v, 0) / ry.length;
+  const varX = rx.reduce((s, v) => s + (v - meanX) ** 2, 0) / rx.length;
+  const varY = ry.reduce((s, v) => s + (v - meanY) ** 2, 0) / ry.length;
+  return {
+    residualStd: (Math.sqrt(varX) + Math.sqrt(varY)) / 2,
+    sampleCount: points.length,
+  };
+}
+
+/**
+ * Hard-flag as bot if the cursor motion has too little residual noise after
+ * local detrending. This is the signature of smoothly-interpolated motion
+ * (CDP mouse + spring follower + minimal noise).
+ *
+ * Calibrated 2026-04-19 from 7 human traces (residualStd 3.58-4.81) and 20
+ * bot traces (blackbox 0.75-1.09, insider 2.96-4.30). A threshold of 1.5 px
+ * leaves ~2× safety margin above blackbox max and catches the signature
+ * cleanly. Insider-class bots with heavy noise injection are caught by the
+ * distance-stddev flag instead.
+ */
+export function isResidualNoiseBotFlag(m: ResidualNoiseMetrics): boolean {
+  if (m.sampleCount < 100) return false;
+  return m.residualStd < 1.5;
+}
+
+function scoreResidualNoise(m: ResidualNoiseMetrics): number {
+  if (m.sampleCount < 30) return 0.5;
+  // Humans cluster at 3.5-5; deeply smooth bots under 1.5; noise-spoofing bots 2.5-4.5.
+  if (m.residualStd < 1.0) return 0.05;
+  if (m.residualStd < 1.8) return 0.2;
+  if (m.residualStd < 2.8) return 0.5;
+  if (m.residualStd <= 6) return 1.0;
+  return 0.6;
 }
 
 // --- Spectral Timing Analysis ---
@@ -604,6 +800,8 @@ export interface BehavioralSignals {
   jerk?: JerkMetrics;
   subMovement?: SubMovementMetrics;
   drift?: DriftMetrics;
+  intervalReg?: IntervalRegularityMetrics;
+  residualNoise?: ResidualNoiseMetrics;
   envScore?: number; // pre-computed environment score (0-1)
 }
 
@@ -620,21 +818,25 @@ export function scoreBehavioral(m: BehavioralMetrics, signals: BehavioralSignals
   const jkScore = signals.jerk ? scoreJerk(signals.jerk) : 0.5;
   const smScore = signals.subMovement ? scoreSubMovements(signals.subMovement) : 0.5;
   const drScore = signals.drift ? scoreDrift(signals.drift) : 0.5;
+  const regScore = signals.intervalReg ? scoreIntervalRegularity(signals.intervalReg) : 0.5;
+  const rnScore = signals.residualNoise ? scoreResidualNoise(signals.residualNoise) : 0.5;
   const enScore = signals.envScore ?? 0.5;
 
   return (
-    pointScore * 0.07 +
-    speedScore * 0.07 +
-    accelScore * 0.06 +
-    tsScore * 0.07 +
-    jitterScore * 0.07 +
-    pauseScore * 0.06 +
-    plScore * 0.14 +
-    specScore * 0.12 +
-    jkScore * 0.10 +
-    smScore * 0.10 +
-    drScore * 0.07 +
-    enScore * 0.07
+    pointScore * 0.05 +
+    speedScore * 0.05 +
+    accelScore * 0.04 +
+    tsScore * 0.05 +
+    jitterScore * 0.05 +
+    pauseScore * 0.05 +
+    plScore * 0.11 +
+    specScore * 0.09 +
+    jkScore * 0.08 +
+    smScore * 0.08 +
+    drScore * 0.05 +
+    regScore * 0.11 +
+    rnScore * 0.14 +
+    enScore * 0.05
   );
 }
 
@@ -797,6 +999,22 @@ export function computeBallScore(
   const spectral = analyzeTimingSpectrum(cursorPoints);
   if (isSpectralBotFlag(spectral)) return { score: 0, verdict: 'bot' };
 
+  // Fix 5 — mechanical timing / no-saccade hard flag. Catches CDP-driven
+  // setTimeout bots and pure-HTTP ticker bots that leak a narrow inter-event
+  // interval distribution with zero natural pauses.
+  const intervalReg = analyzeIntervalRegularity(cursorPoints);
+  if (isIntervalRegularityBotFlag(intervalReg)) {
+    return { score: 0, verdict: 'bot' };
+  }
+
+  // Fix 6 — residual-noise hard flag. Catches smoothly-interpolated cursors
+  // (CDP mouse dispatched to a spring follower with minimal noise) whose
+  // motion, after local detrending, contains almost no biomechanical jitter.
+  const residualNoise = analyzeResidualNoise(cursorPoints);
+  if (isResidualNoiseBotFlag(residualNoise)) {
+    return { score: 0, verdict: 'bot' };
+  }
+
   // Fix 1 — frame-level tracking enforcement
   // Calibrated from real human traces (2026-04-12): precise tracking sits at
   // avgDistance ~9-13px with frameWithinTight=1.0 against R_TIGHT=80. The
@@ -816,6 +1034,20 @@ export function computeBallScore(
     return { score: 0, verdict: 'bot' };
   }
 
+  // Fix 7 — too-precise-tracking hard flag. Insider-class bots that forge
+  // cursor points against a known ball trajectory converge on avgDist 7-10
+  // with stddev 3-4, inside the current <5/<2 band but below the real-human
+  // floor (min avgD=9.9, stddev=7.3 across 7 traces). With tight frame-level
+  // coverage, a narrow distance distribution over a long session is an
+  // impossibility signal: hardware pointer noise alone produces stddev>6.
+  if (
+    cursorPoints.length >= 100 &&
+    ballMetrics.frameWithinTight >= 0.9 &&
+    ballMetrics.distanceStdDev < 5
+  ) {
+    return { score: 0, verdict: 'bot' };
+  }
+
   // Fix 2 — zero reaction time when direction changes occurred
   if (directionChangeCount >= 3 && reactionTime && reactionTime.sampleCount === 0) {
     return { score: 0, verdict: 'bot' };
@@ -827,9 +1059,26 @@ export function computeBallScore(
   const drift = analyzeDrift(cursorPoints);
   const envScore = scoreEnvironment(clientEnv, requestMeta);
 
+  // Fix 8 — aggregate-suspicion hard flag. An adaptive attacker can spoof any
+  // one signal; making them spoof all four simultaneously is expensive.
+  // Fires when the *combination* is deeply bot-like even if each individual
+  // signal is borderline. Thresholds: plScore<0.3 means β<~0.45 (below human
+  // floor 0.64); regScore<0.3 means CV<~0.5 with few pauses; pauseCount==0
+  // over ≥150 pts means no natural saccades — and real humans from 7 traces
+  // have ≥1 pause in every session.
+  if (
+    cursorPoints.length >= 150 &&
+    scorePowerLaw(powerLaw) < 0.3 &&
+    scoreIntervalRegularity(intervalReg) < 0.3 &&
+    intervalReg.pauseCount === 0 &&
+    scoreResidualNoise(residualNoise) < 0.5
+  ) {
+    return { score: 0, verdict: 'bot' };
+  }
+
   const behavioral = analyzeBehavior(cursorPoints);
   const behavScore = scoreBehavioral(behavioral, {
-    powerLaw, spectral, jerk, subMovement, drift, envScore,
+    powerLaw, spectral, jerk, subMovement, drift, intervalReg, residualNoise, envScore,
   });
   const ballScore = scoreBallTracking(ballMetrics, speedProfile, reactionTime, directionChangeCount);
 

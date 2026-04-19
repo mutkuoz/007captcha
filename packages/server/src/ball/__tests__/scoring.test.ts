@@ -1,20 +1,24 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
 import { computeBallScore } from '../scoring';
 import type { ReactionTimeMetrics } from '../scoring';
 import type { BallAnalysisMetrics, CursorPoint } from '../../types';
 
+// Real human traces captured 2026-04-12, used as ground truth for scoring tests.
+// Using synthetic data here caused false positives on hard flags calibrated from
+// real traces — specifically the power-law β range. Loading a real record keeps
+// the test honest against production scoring rules.
+const HUMAN_TRACE_PATH = resolve(__dirname, '../../../../../training/data/2026-04-12_human.jsonl');
+let cachedHumanPoints: CursorPoint[] | null = null;
 function makeHumanCursorPoints(): CursorPoint[] {
-  const points: CursorPoint[] = [];
-  let t = 0;
-  for (let i = 0; i < 300; i++) {
-    t += 8 + Math.random() * 14;
-    points.push({
-      x: 100 + Math.sin(i / 20) * 50 + (Math.random() - 0.5) * 10,
-      y: 100 + Math.cos(i / 20) * 50 + (Math.random() - 0.5) * 10,
-      t,
-    });
-  }
-  return points;
+  if (cachedHumanPoints) return cachedHumanPoints.slice();
+  const lines = readFileSync(HUMAN_TRACE_PATH, 'utf8').trim().split('\n');
+  const rec = JSON.parse(lines[0]);
+  cachedHumanPoints = rec.points.map((p: { x: number; y: number; t: number }) => ({
+    x: p.x, y: p.y, t: p.t,
+  }));
+  return cachedHumanPoints!.slice();
 }
 
 function makeBotCursorPoints(): CursorPoint[] {
@@ -140,5 +144,158 @@ describe('computeBallScore — reaction time hard flag (Fix 2)', () => {
       /* directionChangeCount */ 0,
     );
     expect(result.verdict).not.toBe('bot');
+  });
+});
+
+describe('computeBallScore — attack-replay regressions (Fix 5: mechanical timing)', () => {
+  // Mechanical-timing signature: locked inter-event interval + zero saccade
+  // pauses over a long tracking window. Both the CDP-driven and pure-HTTP
+  // bypass attacks (2026-04-19) produce this shape. See
+  // 007captcha-bypass-experiment/3-traces/ for the originals.
+
+  function makeTickerBotPoints(intervalMs: number, cvRatio: number, durationMs: number): CursorPoint[] {
+    // Simulates a bot ticking at `intervalMs` with `cvRatio * intervalMs` jitter
+    // and no pauses — the pattern both attack scripts produce.
+    const pts: CursorPoint[] = [];
+    let t = 0;
+    let cx = 240, cy = 200, angle = 0;
+    while (t < durationMs) {
+      const jitter = (Math.random() - 0.5) * intervalMs * cvRatio * 2;
+      t += intervalMs + jitter;
+      angle += 0.08;
+      cx += Math.cos(angle) * 2 + (Math.random() - 0.5);
+      cy += Math.sin(angle) * 2 + (Math.random() - 0.5);
+      pts.push({ x: cx, y: cy, t });
+    }
+    return pts;
+  }
+
+  it('flags 60Hz CDP-style ticker with 0 pauses (blackbox attack signature)', () => {
+    // blackbox trace characteristics: ~16.7ms interval, CV ~0.13, 0 pauses,
+    // ~480 points over 8s.
+    const points = makeTickerBotPoints(16.7, 0.13, 8100);
+    const metrics: BallAnalysisMetrics = {
+      averageDistance: 48, distanceStdDev: 6, estimatedLag: 250,
+      lagConsistency: 200, overshootCount: 9,
+      trackingCoverage: 1.0, frameWithinTight: 1.0,
+    };
+    const result = computeBallScore(points, metrics);
+    expect(result.verdict).toBe('bot');
+    expect(result.score).toBe(0);
+  });
+
+  it('flags 90Hz pure-HTTP ticker with 0 pauses (insider attack signature)', () => {
+    // insider trace characteristics: ~11.5ms interval, CV ~0.21, 0 pauses,
+    // ~700 points over 8s, plus inhumanly tight tracking (avgD≈8, sdD≈4).
+    const points = makeTickerBotPoints(11.5, 0.21, 8100);
+    const metrics: BallAnalysisMetrics = {
+      averageDistance: 8.5, distanceStdDev: 4.0, estimatedLag: 200,
+      lagConsistency: 18, overshootCount: 7,
+      trackingCoverage: 1.0, frameWithinTight: 1.0,
+    };
+    const result = computeBallScore(points, metrics);
+    expect(result.verdict).toBe('bot');
+    expect(result.score).toBe(0);
+  });
+
+  it('does not flag a short session — CV flag needs ≥6s of data', () => {
+    // Session too short for the no-pause rule to apply.
+    const points = makeTickerBotPoints(16.7, 0.13, 3000);
+    const metrics: BallAnalysisMetrics = {
+      averageDistance: 48, distanceStdDev: 6, estimatedLag: 250,
+      lagConsistency: 200, overshootCount: 3,
+      trackingCoverage: 1.0, frameWithinTight: 1.0,
+    };
+    const result = computeBallScore(points, metrics);
+    // May still fail on OTHER criteria; just assert this specific flag
+    // isn't the cause (we don't require human verdict here).
+    // If it's a bot verdict, it must be from some other existing flag.
+    // The flag under test is gated on duration >= 6s and points >= 100,
+    // neither of which is satisfied by 3s @ 60Hz (~180 points, 3s < 6s).
+    // So the CV flag alone shouldn't trigger. Confirm by score != 0:
+    // only hard flags set score to exactly 0.
+    expect(result.score).toBeGreaterThan(0);
+  });
+});
+
+describe('computeBallScore — residual-noise hard flag (Fix 6)', () => {
+  it('flags smoothly-interpolated cursor with near-zero residual noise', () => {
+    // Pure sine-wave motion at 60Hz — after local detrending, residuals are
+    // near-zero. Signature of a CDP mouse + spring follower without noise
+    // injection. Calibrated from blackbox attack traces (residualStd 0.75-1.09).
+    const points: CursorPoint[] = [];
+    let t = 0;
+    for (let i = 0; i < 480; i++) {
+      t += 16.7;
+      points.push({
+        x: 240 + 100 * Math.sin(t / 500),
+        y: 200 + 80 * Math.cos(t / 600),
+        t,
+      });
+    }
+    const metrics: BallAnalysisMetrics = {
+      averageDistance: 40, distanceStdDev: 8, estimatedLag: 200,
+      lagConsistency: 30, overshootCount: 5,
+      trackingCoverage: 1.0, frameWithinTight: 0.95,
+    };
+    const result = computeBallScore(points, metrics);
+    expect(result.verdict).toBe('bot');
+    expect(result.score).toBe(0);
+  });
+});
+
+describe('computeBallScore — too-precise-tracking hard flag (Fix 7)', () => {
+  it('flags insider-style tight tracking (sdD<5 with full tight coverage)', () => {
+    // Insider attack signature: avgDist 7-10px, distanceStdDev 3-4.6,
+    // frameWithinTight 1.0. Real humans: sdD ≥ 7.3.
+    const human = makeHumanCursorPoints();
+    const metrics: BallAnalysisMetrics = {
+      averageDistance: 8.5, distanceStdDev: 4.0, estimatedLag: 200,
+      lagConsistency: 18, overshootCount: 7,
+      trackingCoverage: 1.0, frameWithinTight: 1.0,
+    };
+    const result = computeBallScore(human, metrics);
+    expect(result.verdict).toBe('bot');
+    expect(result.score).toBe(0);
+  });
+
+  it('does NOT flag human-baseline precise tracking (sdD=5.73)', () => {
+    // From the real-trace baseline: avg 9.54, sdD 5.73 — must still pass.
+    const human = makeHumanCursorPoints();
+    const metrics: BallAnalysisMetrics = {
+      averageDistance: 9.54, distanceStdDev: 5.73, estimatedLag: 100,
+      lagConsistency: 132, overshootCount: 3,
+      trackingCoverage: 1.0, frameWithinTight: 1.0,
+    };
+    const result = computeBallScore(human, metrics);
+    expect(result.verdict).not.toBe('bot');
+  });
+});
+
+describe('computeBallScore — power-law calibration (Fix 5: β range)', () => {
+  it('flags textbook 1/3 power-law (classic bot mimic)', () => {
+    // Construct points where speed ∝ R^(1/3) — exactly what a bot would
+    // produce to mimic the Lacquaniti law. Real humans on this task show
+    // β ≈ 0.65-1.05, so β=0.33 is now the bot signature.
+    const points: CursorPoint[] = [];
+    let t = 0;
+    // Generate a path with varying curvature and explicitly correlated β=1/3 speed.
+    for (let i = 0; i < 300; i++) {
+      const phase = i * 0.05;
+      const R = 40 + 30 * Math.sin(phase);          // varying radius of curvature
+      const V = 200 * Math.pow(R, 1 / 3);             // β=1/3 relationship
+      const dt = 1000 / V * 5;                        // step so segment length tracks V
+      t += Math.max(5, Math.min(30, dt));
+      const cx = 240 + R * Math.cos(phase);
+      const cy = 200 + R * Math.sin(phase);
+      points.push({ x: cx + (Math.random() - 0.5) * 0.5, y: cy + (Math.random() - 0.5) * 0.5, t });
+    }
+    const metrics: BallAnalysisMetrics = {
+      averageDistance: 40, distanceStdDev: 8, estimatedLag: 150,
+      lagConsistency: 25, overshootCount: 5,
+      trackingCoverage: 1.0, frameWithinTight: 1.0,
+    };
+    const result = computeBallScore(points, metrics);
+    expect(result.verdict).toBe('bot');
   });
 });
