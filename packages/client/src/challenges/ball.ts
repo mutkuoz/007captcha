@@ -241,6 +241,11 @@ export class BallChallenge implements ChallengeInstance {
     this.lastCursor = { x: 240, y: 200 }; // canvas center fallback
     this.trackingStartT = performance.now();
 
+    // Let the widget reset its user-facing timer to the actual tracking
+    // duration — the pre-tracking phases (click-to-start prompt + 3s
+    // countdown) shouldn't consume the visible budget.
+    this.challengeCtx.onTrackingStart?.(TRACKING_MS);
+
     const textEl = this.challengeCtx.instructionEl.querySelector('.instruction-text');
     if (textEl) {
       textEl.innerHTML =

@@ -18,8 +18,12 @@ export class CaptchaWidget {
   private state: WidgetState = 'ready';
   private challengeId!: string;
   private challenge!: ChallengeInstance;
+  /** Safety failsafe that force-completes the challenge if the user never starts tracking. */
+  private failsafeTimer: ReturnType<typeof setTimeout> | null = null;
+  /** User-facing countdown — runs only while tracking is active. */
   private timerInterval: ReturnType<typeof setInterval> | null = null;
   private timeLeft = 0;
+  private timerTotal = 0;
 
   // DOM refs
   private root!: HTMLDivElement;
@@ -234,17 +238,36 @@ export class CaptchaWidget {
       ctx: this.canvas.getContext('2d')!,
       instructionEl: this.instructionEl,
       strokeColor,
+      onTrackingStart: (durationMs) => this.startVisibleTimer(durationMs),
       onComplete: () => this.finishChallenge(),
     });
 
-    const tl = this.challenge.timeLimit ?? this.config.timeLimit;
-    this.timeLeft = tl;
-    this.updateTimer(tl);
+    // Keep a silent failsafe for the whole budget so a stalled session
+    // eventually resolves, but don't count it down on screen.
+    const budget = this.challenge.timeLimit ?? this.config.timeLimit;
+    this.timerEl.textContent = '\u2014';
+    this.progressBar.style.width = '100%';
+    this.progressBar.className = 'progress-bar';
+    this.failsafeTimer = setTimeout(() => this.handleTimeout(), budget);
+  }
+
+  /**
+   * Kick off the user-visible countdown, called by the challenge when the
+   * measured tracking window actually begins. Resets the timer to the true
+   * tracking duration so users see the budget that matters to them rather
+   * than the overall (countdown + tracking + buffer) envelope.
+   */
+  private startVisibleTimer(durationMs: number): void {
+    if (this.timerInterval) clearInterval(this.timerInterval);
+    this.timerTotal = durationMs;
+    this.timeLeft = durationMs;
+    this.updateTimer(durationMs);
     this.timerInterval = setInterval(() => {
       this.timeLeft -= 100;
-      this.updateTimer(tl);
+      this.updateTimer(durationMs);
       if (this.timeLeft <= 0) {
-        this.handleTimeout();
+        if (this.timerInterval) clearInterval(this.timerInterval);
+        this.timerInterval = null;
       }
     }, 100);
   }
@@ -275,6 +298,10 @@ export class CaptchaWidget {
     if (this.timerInterval) {
       clearInterval(this.timerInterval);
       this.timerInterval = null;
+    }
+    if (this.failsafeTimer) {
+      clearTimeout(this.failsafeTimer);
+      this.failsafeTimer = null;
     }
     this.challenge.stop();
     this.doneBtn.disabled = true;
@@ -343,6 +370,7 @@ export class CaptchaWidget {
 
   destroy(): void {
     if (this.timerInterval) clearInterval(this.timerInterval);
+    if (this.failsafeTimer) clearTimeout(this.failsafeTimer);
     if (this.challenge) this.challenge.stop();
     this.host.remove();
     this.hiddenInput.remove();
@@ -354,6 +382,9 @@ export class CaptchaWidget {
 
   reset(): void {
     if (this.timerInterval) clearInterval(this.timerInterval);
+    if (this.failsafeTimer) clearTimeout(this.failsafeTimer);
+    this.timerInterval = null;
+    this.failsafeTimer = null;
     if (this.challenge) this.challenge.stop();
     this.state = 'ready';
     this.titleEl.textContent = 'Human Verification';

@@ -6,6 +6,13 @@ export interface ChallengeContext {
   ctx: CanvasRenderingContext2D;
   instructionEl: HTMLDivElement;
   strokeColor: string;
+  /**
+   * Challenge calls this when the actual measured tracking window begins
+   * (after any click-to-start prompts and countdown). The widget uses
+   * `durationMs` to reset the user-facing timer so users only see the
+   * time budget for the part that actually matters.
+   */
+  onTrackingStart?: (durationMs: number) => void;
   /** Challenge calls this when it auto-completes (e.g., ball stream ended) */
   onComplete: () => void;
 }
