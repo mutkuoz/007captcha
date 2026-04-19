@@ -43,7 +43,7 @@ export class BallChallenge implements ChallengeInstance {
 
   getMethod(): ChallengeMethod { return 'ball'; }
   getChallengeId(): string { return 'ball'; }
-  getTitle(): string { return 'Follow the ball'; }
+  getTitle(): string { return 'Follow the target'; }
 
   start(ctx: ChallengeContext): void {
     this.challengeCtx = ctx;
@@ -56,23 +56,60 @@ export class BallChallenge implements ChallengeInstance {
     ctx.instructionEl.classList.remove('hidden');
     const icon = document.createElement('span');
     icon.className = 'instruction-icon';
-    icon.textContent = '\u25CF';
+    icon.innerHTML = `
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="9"/>
+        <circle cx="12" cy="12" r="5"/>
+        <circle cx="12" cy="12" r="1.5" fill="currentColor"/>
+      </svg>`;
     const text = document.createElement('span');
     text.className = 'instruction-text';
-    text.innerHTML = 'Follow the ball with your cursor. <strong>Click to begin.</strong>';
+    text.innerHTML =
+      'Track the <strong>largest object</strong> on the screen with your cursor.' +
+      '<span class="hint">Smaller shapes may appear &mdash; ignore them. Click the canvas to begin.</span>';
     ctx.instructionEl.appendChild(icon);
     ctx.instructionEl.appendChild(text);
 
-    // Show "click to start" on a neutral background
+    // "Click to start" screen — dark surface with a subtle crosshair and
+    // centered call-to-action matching the widget's surveillance aesthetic.
     const c = ctx.ctx;
-    c.fillStyle = '#1a1a2e';
+    c.fillStyle = '#0a0a0a';
     c.fillRect(0, 0, 480, 400);
+
+    // Subtle crosshair guides
     c.save();
-    c.fillStyle = '#e94560';
-    c.font = 'bold 18px sans-serif';
+    c.strokeStyle = 'rgba(255, 255, 255, 0.06)';
+    c.lineWidth = 1;
+    c.beginPath();
+    c.moveTo(240, 80); c.lineTo(240, 160);
+    c.moveTo(240, 240); c.lineTo(240, 320);
+    c.moveTo(80, 200); c.lineTo(160, 200);
+    c.moveTo(320, 200); c.lineTo(400, 200);
+    c.stroke();
+    c.restore();
+
+    // Target ring
+    c.save();
+    c.strokeStyle = 'rgba(8, 145, 178, 0.55)';
+    c.lineWidth = 1.5;
+    c.beginPath();
+    c.arc(240, 200, 30, 0, Math.PI * 2);
+    c.stroke();
+    c.beginPath();
+    c.arc(240, 200, 18, 0, Math.PI * 2);
+    c.stroke();
+    c.restore();
+
+    // Call-to-action text
+    c.save();
+    c.fillStyle = 'rgba(255, 255, 255, 0.92)';
+    c.font = '600 15px ui-sans-serif, system-ui, -apple-system, Inter, sans-serif';
     c.textAlign = 'center';
     c.textBaseline = 'middle';
-    c.fillText('Click to start', 480 / 2, 400 / 2);
+    c.fillText('Click anywhere to begin', 240, 260);
+    c.fillStyle = 'rgba(255, 255, 255, 0.45)';
+    c.font = '500 12px ui-monospace, Menlo, monospace';
+    c.fillText('FOLLOW THE LARGEST OBJECT', 240, 282);
     c.restore();
 
     this.boundClick = this.onCanvasClick.bind(this);
@@ -182,7 +219,11 @@ export class BallChallenge implements ChallengeInstance {
     const ballColor = this.visuals!.ballColor;
 
     const textEl = this.challengeCtx.instructionEl.querySelector('.instruction-text');
-    if (textEl) textEl.innerHTML = 'Get ready\u2026 keep your cursor on the ball!';
+    if (textEl) {
+      textEl.innerHTML =
+        'Get ready &mdash; track the <strong>largest object</strong> for eight seconds.' +
+        '<span class="hint">Decoys will appear alongside it. Stay locked on the biggest one.</span>';
+    }
 
     drawCountdown(ctx2d, bg, ballColor, '3');
     this.countdownTimers.push(setTimeout(() => drawCountdown(ctx2d, bg, ballColor, '2'), 1000));
@@ -201,7 +242,11 @@ export class BallChallenge implements ChallengeInstance {
     this.trackingStartT = performance.now();
 
     const textEl = this.challengeCtx.instructionEl.querySelector('.instruction-text');
-    if (textEl) textEl.innerHTML = 'Follow the ball!';
+    if (textEl) {
+      textEl.innerHTML =
+        'Stay locked on the <strong>largest object</strong>.' +
+        '<span class="hint">Ignore the smaller dots.</span>';
+    }
 
     // Bind pointer move for cursor tracking
     this.boundMove = this.onPointerMove.bind(this);

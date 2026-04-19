@@ -23,10 +23,12 @@ export class CaptchaWidget {
 
   // DOM refs
   private root!: HTMLDivElement;
+  private statusDot!: HTMLSpanElement;
   private titleEl!: HTMLSpanElement;
   private timerEl!: HTMLSpanElement;
   private instructionEl!: HTMLDivElement;
   private canvas!: HTMLCanvasElement;
+  private canvasWrap!: HTMLDivElement;
   private overlay!: HTMLDivElement;
   private doneBtn!: HTMLButtonElement;
   private progressBar!: HTMLDivElement;
@@ -75,14 +77,29 @@ export class CaptchaWidget {
     this.root = document.createElement('div');
     this.root.className = 'root';
 
-    // Header
+    // Header: brand mark (status dot + wordmark) · title · timer
     const header = document.createElement('div');
     header.className = 'header';
+
+    const brandMark = document.createElement('span');
+    brandMark.className = 'brand-mark';
+    this.statusDot = document.createElement('span');
+    this.statusDot.className = 'brand-dot';
+    const brandText = document.createElement('span');
+    brandText.className = 'brand-text';
+    brandText.textContent = '007';
+    brandMark.appendChild(this.statusDot);
+    brandMark.appendChild(brandText);
+
     this.titleEl = document.createElement('span');
     this.titleEl.className = 'title';
-    this.titleEl.textContent = '007captcha';
+    this.titleEl.textContent = 'Human Verification';
+
     this.timerEl = document.createElement('span');
     this.timerEl.className = 'timer';
+    this.timerEl.textContent = '—';
+
+    header.appendChild(brandMark);
     header.appendChild(this.titleEl);
     header.appendChild(this.timerEl);
     this.root.appendChild(header);
@@ -92,11 +109,16 @@ export class CaptchaWidget {
     this.instructionEl.className = 'instruction hidden';
     this.root.appendChild(this.instructionEl);
 
-    // Canvas wrapper
-    const canvasWrap = document.createElement('div');
-    canvasWrap.className = 'canvas-wrap';
+    // Canvas wrapper with L-bracket viewfinder frame
+    this.canvasWrap = document.createElement('div');
+    this.canvasWrap.className = 'canvas-wrap';
     this.canvas = document.createElement('canvas');
-    canvasWrap.appendChild(this.canvas);
+    this.canvasWrap.appendChild(this.canvas);
+    for (const pos of ['tl', 'tr', 'bl', 'br']) {
+      const b = document.createElement('span');
+      b.className = `bracket ${pos}`;
+      this.canvasWrap.appendChild(b);
+    }
 
     // Overlay (ready state)
     this.overlay = document.createElement('div');
@@ -104,7 +126,11 @@ export class CaptchaWidget {
 
     const shield = document.createElement('div');
     shield.className = 'overlay-shield';
-    shield.textContent = '\uD83D\uDEE1\uFE0F';
+    shield.innerHTML = `
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 2 4 5v7c0 4.4 3.1 8.6 8 10 4.9-1.4 8-5.6 8-10V5l-8-3z"/>
+        <path d="m9 12 2 2 4-4"/>
+      </svg>`;
 
     const oTitle = document.createElement('div');
     oTitle.className = 'overlay-title';
@@ -112,20 +138,23 @@ export class CaptchaWidget {
 
     const oDesc = document.createElement('div');
     oDesc.className = 'overlay-desc';
-    oDesc.textContent = 'You\u2019ll be asked to complete a quick challenge. Just act naturally!';
+    oDesc.innerHTML =
+      'Follow the <strong>largest object</strong> on the screen ' +
+      'with your cursor for eight seconds.';
 
     const startBtn = document.createElement('button');
     startBtn.className = 'start-btn';
-    startBtn.textContent = 'Start';
+    startBtn.innerHTML =
+      'Begin verification <span class="start-btn-arrow">\u2192</span>';
     startBtn.addEventListener('click', () => this.startChallenge());
 
     this.overlay.appendChild(shield);
     this.overlay.appendChild(oTitle);
     this.overlay.appendChild(oDesc);
     this.overlay.appendChild(startBtn);
-    canvasWrap.appendChild(this.overlay);
+    this.canvasWrap.appendChild(this.overlay);
 
-    this.root.appendChild(canvasWrap);
+    this.root.appendChild(this.canvasWrap);
 
     // Progress bar
     const progress = document.createElement('div');
@@ -144,9 +173,16 @@ export class CaptchaWidget {
     this.doneBtn.textContent = 'Done';
     this.doneBtn.disabled = true;
     this.doneBtn.addEventListener('click', () => this.finishChallenge());
+
     const brand = document.createElement('span');
     brand.className = 'brand';
-    brand.textContent = 'Protected by 007captcha';
+    brand.innerHTML = `
+      <svg class="brand-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="4" y="11" width="16" height="10" rx="2"/>
+        <path d="M8 11V7a4 4 0 0 1 8 0v4"/>
+      </svg>
+      <span>Secured by 007captcha</span>`;
+
     this.footerEl.appendChild(this.doneBtn);
     this.footerEl.appendChild(brand);
     this.root.appendChild(this.footerEl);
@@ -182,6 +218,8 @@ export class CaptchaWidget {
     this.state = 'drawing';
 
     this.titleEl.textContent = this.challenge.getTitle();
+    this.statusDot.className = 'brand-dot active';
+    this.canvasWrap.classList.add('tracking');
 
     this.doneBtn.style.display = this.challenge.showDoneButton ? '' : 'none';
     this.doneBtn.disabled = !this.challenge.showDoneButton;
@@ -241,7 +279,9 @@ export class CaptchaWidget {
     this.challenge.stop();
     this.doneBtn.disabled = true;
     this.titleEl.textContent = 'Analyzing\u2026';
+    this.timerEl.textContent = '';
     this.instructionEl.classList.add('hidden');
+    this.canvasWrap.classList.remove('tracking');
 
     try {
       const result = await this.challenge.analyze();
@@ -268,7 +308,8 @@ export class CaptchaWidget {
 
   private showResult(success: boolean, message: string): void {
     this.state = success ? 'success' : 'fail';
-    this.titleEl.textContent = success ? '\u2705 Human verified' : '\u274C Challenge failed';
+    this.titleEl.textContent = success ? 'Verification passed' : 'Verification failed';
+    this.statusDot.className = `brand-dot ${success ? 'success' : 'fail'}`;
     this.timerEl.textContent = '';
     this.progressBar.style.width = '0%';
 
@@ -278,9 +319,12 @@ export class CaptchaWidget {
 
     const icon = document.createElement('span');
     icon.className = 'result-icon';
-    icon.textContent = success ? '\u2713' : '\u2717';
+    icon.innerHTML = success
+      ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`
+      : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
 
     const text = document.createElement('span');
+    text.className = 'result-text';
     text.textContent = message;
 
     banner.appendChild(icon);
@@ -289,7 +333,7 @@ export class CaptchaWidget {
     if (!success) {
       const retry = document.createElement('button');
       retry.className = 'retry-btn';
-      retry.textContent = 'Retry';
+      retry.textContent = 'Try again';
       retry.addEventListener('click', () => this.reset());
       banner.appendChild(retry);
     }
@@ -312,8 +356,10 @@ export class CaptchaWidget {
     if (this.timerInterval) clearInterval(this.timerInterval);
     if (this.challenge) this.challenge.stop();
     this.state = 'ready';
-    this.titleEl.textContent = '007captcha';
-    this.timerEl.textContent = '';
+    this.titleEl.textContent = 'Human Verification';
+    this.timerEl.textContent = '\u2014';
+    this.statusDot.className = 'brand-dot';
+    this.canvasWrap.classList.remove('tracking');
     this.progressBar.style.width = '100%';
     this.progressBar.className = 'progress-bar';
     this.doneBtn.disabled = true;

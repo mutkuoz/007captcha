@@ -1,7 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
-import { computeBallScore } from '../scoring';
+import {
+  computeBallScore,
+  analyzeIntervalRegularity,
+  isIntervalRegularityBotFlag,
+} from '../scoring';
 import type { ReactionTimeMetrics } from '../scoring';
 import type { BallAnalysisMetrics, CursorPoint } from '../../types';
 
@@ -153,9 +157,16 @@ describe('computeBallScore — attack-replay regressions (Fix 5: mechanical timi
   // bypass attacks (2026-04-19) produce this shape. See
   // 007captcha-bypass-experiment/3-traces/ for the originals.
 
-  function makeTickerBotPoints(intervalMs: number, cvRatio: number, durationMs: number): CursorPoint[] {
+  function makeTickerBotPoints(
+    intervalMs: number,
+    cvRatio: number,
+    durationMs: number,
+    noiseAmp = 1,
+  ): CursorPoint[] {
     // Simulates a bot ticking at `intervalMs` with `cvRatio * intervalMs` jitter
-    // and no pauses — the pattern both attack scripts produce.
+    // and no pauses — the pattern both attack scripts produce. `noiseAmp`
+    // controls per-sample positional jitter; increase to test cases that
+    // should NOT trip the residual-noise flag.
     const pts: CursorPoint[] = [];
     let t = 0;
     let cx = 240, cy = 200, angle = 0;
@@ -163,8 +174,8 @@ describe('computeBallScore — attack-replay regressions (Fix 5: mechanical timi
       const jitter = (Math.random() - 0.5) * intervalMs * cvRatio * 2;
       t += intervalMs + jitter;
       angle += 0.08;
-      cx += Math.cos(angle) * 2 + (Math.random() - 0.5);
-      cy += Math.sin(angle) * 2 + (Math.random() - 0.5);
+      cx += Math.cos(angle) * 2 + (Math.random() - 0.5) * noiseAmp;
+      cy += Math.sin(angle) * 2 + (Math.random() - 0.5) * noiseAmp;
       pts.push({ x: cx, y: cy, t });
     }
     return pts;
@@ -198,23 +209,21 @@ describe('computeBallScore — attack-replay regressions (Fix 5: mechanical timi
     expect(result.score).toBe(0);
   });
 
-  it('does not flag a short session — CV flag needs ≥6s of data', () => {
-    // Session too short for the no-pause rule to apply.
-    const points = makeTickerBotPoints(16.7, 0.13, 3000);
-    const metrics: BallAnalysisMetrics = {
-      averageDistance: 48, distanceStdDev: 6, estimatedLag: 250,
-      lagConsistency: 200, overshootCount: 3,
-      trackingCoverage: 1.0, frameWithinTight: 1.0,
-    };
-    const result = computeBallScore(points, metrics);
-    // May still fail on OTHER criteria; just assert this specific flag
-    // isn't the cause (we don't require human verdict here).
-    // If it's a bot verdict, it must be from some other existing flag.
-    // The flag under test is gated on duration >= 6s and points >= 100,
-    // neither of which is satisfied by 3s @ 60Hz (~180 points, 3s < 6s).
-    // So the CV flag alone shouldn't trigger. Confirm by score != 0:
-    // only hard flags set score to exactly 0.
-    expect(result.score).toBeGreaterThan(0);
+  it('CV flag does not fire on a short (<6s) session', () => {
+    // Direct unit test of the CV-flag duration gate in isolation —
+    // other hard flags are orthogonal and are tested separately.
+    const shortPoints = makeTickerBotPoints(16.7, 0.13, 3000);
+    const metrics = analyzeIntervalRegularity(shortPoints);
+    expect(metrics.duration).toBeLessThan(6000);
+    expect(isIntervalRegularityBotFlag(metrics)).toBe(false);
+  });
+
+  it('CV flag fires on a long mechanical session even with pauseCount=0', () => {
+    const longPoints = makeTickerBotPoints(16.7, 0.13, 8000);
+    const metrics = analyzeIntervalRegularity(longPoints);
+    expect(metrics.duration).toBeGreaterThan(6000);
+    expect(metrics.pauseCount).toBe(0);
+    expect(isIntervalRegularityBotFlag(metrics)).toBe(true);
   });
 });
 
